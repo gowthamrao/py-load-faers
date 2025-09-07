@@ -29,6 +29,11 @@ class DownloaderSettings(BaseModel):
     timeout: int = Field(60, description="Timeout in seconds for download requests.")
 
 
+class ProcessingSettings(BaseModel):
+    """Configuration for data processing."""
+    chunk_size: int = Field(500_000, description="Number of records to process in a single chunk.")
+    # Add other processing-related settings here in the future
+
 class AppSettings(BaseSettings):
     """
     Main application settings.
@@ -46,6 +51,7 @@ class AppSettings(BaseSettings):
 
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)
     downloader: DownloaderSettings = Field(default_factory=DownloaderSettings)
+    processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
     log_level: str = Field("INFO", description="Logging level (e.g., DEBUG, INFO, WARNING).")
 
     @classmethod

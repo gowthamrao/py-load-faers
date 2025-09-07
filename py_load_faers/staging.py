@@ -3,47 +3,89 @@
 This module provides functions for staging parsed data for bulk loading.
 """
 import csv
-import io
 import logging
-from typing import Iterator, Dict, Any, Type
+import tempfile
+from pathlib import Path
+from typing import Iterator, Dict, Any, Type, List, Optional, Tuple
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 
-def stage_data_for_copy(records: Iterator[Dict[str, Any]], model: Type[BaseModel]) -> io.StringIO:
+def stage_data_to_csv_files(
+    record_iterator: Iterator[Dict[str, Any]],
+    table_models: Dict[str, Type[BaseModel]],
+    chunk_size: int = 1_000_000,
+) -> Dict[str, List[Path]]:
     """
-    Converts an iterator of records into an in-memory, dollar-delimited CSV
-    file suitable for PostgreSQL's COPY command.
+    Parses a stream of FAERS reports and writes them to chunked, temporary CSV files.
 
-    The order of columns in the CSV is determined by the field order in the
-    provided Pydantic model, ensuring alignment with the database table.
-
-    :param records: An iterator of dictionaries, where each dictionary is a record.
-    :param model: The Pydantic model corresponding to the data, used to define columns.
-    :return: An in-memory io.StringIO buffer containing the CSV data.
+    :param record_iterator: An iterator that yields parsed FAERS reports.
+    :param table_models: A dictionary mapping table names to Pydantic models.
+    :param chunk_size: The number of records to hold in memory per table before flushing to a file.
+    :return: A dictionary mapping table names to a list of paths to the created CSV files.
     """
-    logger.info(f"Staging data for model {model.__name__} for bulk copy.")
+    logger.info(f"Staging records to chunked CSV files with chunk size {chunk_size}.")
+    temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_"))
+    logger.info(f"Using temporary staging directory: {temp_dir}")
 
-    # Use StringIO to build the CSV in memory
-    buffer = io.StringIO()
+    staged_files: Dict[str, List[Path]] = {table_name: [] for table_name in table_models.keys()}
+    record_buffers: Dict[str, List[Dict[str, Any]]] = {table_name: [] for table_name in table_models.keys()}
+    file_counters: Dict[str, int] = {table_name: 0 for table_name in table_models.keys()}
 
-    # Get column headers from the Pydantic model to ensure correct order
+    for report in record_iterator:
+        for table_name, records in report.items():
+            if table_name in record_buffers:
+                record_buffers[table_name].extend(records)
+
+        # Check if any buffer has reached the chunk size
+        for table_name, buffer in record_buffers.items():
+            if len(buffer) >= chunk_size:
+                _flush_buffer_to_disk(
+                    temp_dir, table_name, buffer, file_counters, staged_files, table_models[table_name]
+                )
+                buffer.clear()
+
+    # Flush any remaining records
+    for table_name, buffer in record_buffers.items():
+        if buffer:
+            _flush_buffer_to_disk(
+                temp_dir, table_name, buffer, file_counters, staged_files, table_models[table_name]
+            )
+
+    logger.info("Staging to CSV files complete.")
+    return staged_files
+
+
+def _flush_buffer_to_disk(
+    temp_dir: Path,
+    table_name: str,
+    buffer: List[Dict[str, Any]],
+    file_counters: Dict[str, int],
+    staged_files: Dict[str, List[Path]],
+    model: Type[BaseModel],
+) -> None:
+    """Helper to write a buffer of records to a new CSV file."""
+    chunk_num = file_counters[table_name]
+    file_path = temp_dir / f"{table_name}_chunk_{chunk_num}.csv"
+    logger.debug(f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}")
+
     headers = [field.lower() for field in model.model_fields.keys()]
 
-    writer = csv.writer(buffer, delimiter='$', quoting=csv.QUOTE_MINIMAL)
+    # Special handling for DEMO table to support deduplication
+    if table_name == "demo":
+        # To achieve the desired sort order (caseid ASC, fda_dt DESC, primaryid DESC),
+        # we perform a series of stable sorts in reverse order of precedence.
+        # Python's sort is stable.
+        buffer.sort(key=lambda r: r.get("primaryid", ""), reverse=True)
+        buffer.sort(key=lambda r: r.get("fda_dt", "0"), reverse=True)
+        buffer.sort(key=lambda r: r.get("caseid", ""))
 
-    # Write header
-    writer.writerow(headers)
+    with file_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="$", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(headers)
+        for record in buffer:
+            writer.writerow([record.get(h) for h in headers])
 
-    # Write data rows
-    for record in records:
-        # Build the row in the correct order, substituting None for missing keys
-        row = [record.get(h) for h in headers]
-        writer.writerow(row)
-
-    # Rewind the buffer to the beginning so it can be read
-    buffer.seek(0)
-
-    logger.info(f"Staging complete for model {model.__name__}.")
-    return buffer
+    staged_files[table_name].append(file_path)
+    file_counters[table_name] += 1

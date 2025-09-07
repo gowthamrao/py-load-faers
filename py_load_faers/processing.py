@@ -3,11 +3,13 @@
 This module handles the core data processing and transformation logic,
 such as deduplication and nullification.
 """
+import csv
+import heapq
 import logging
 import re
 import zipfile
 from pathlib import Path
-from typing import Set, List, Dict, Any
+from typing import Set, List, Dict, Any, Iterator, Iterable
 
 import pandas as pd
 
@@ -66,56 +68,130 @@ def get_caseids_to_delete(zip_path: Path) -> Set[str]:
     return case_ids_to_delete
 
 
-def deduplicate_records(demo_records: List[Dict[str, Any]]) -> Set[str]:
+def merge_sorted_files(file_paths: List[Path], output_path: Path) -> None:
     """
-    Applies the FDA-recommended deduplication logic to a list of demographic records.
+    Merges multiple sorted files into a single sorted file using a k-way merge.
+    The sort order is specific to the FAERS deduplication logic:
+    caseid (asc), fda_dt (desc), primaryid (desc).
+    """
+    logger.info(f"Merging {len(file_paths)} sorted files into {output_path}.")
 
-    The logic is: for each CASEID, select the record with the maximum FDA_DT.
-    If there's a tie, select the record with the maximum PRIMARYID.
+    class SortableRow:
+        def __init__(self, row: List[str], headers: List[str]):
+            self.row = row
+            self._headers = headers
+            # Cache the values used for comparison
+            self.caseid = self._get('caseid')
+            self.fda_dt = self._get('fda_dt')
+            self.primaryid = self._get('primaryid')
 
-    :param demo_records: A list of dictionaries, where each dictionary represents
-                         a record from a FAERS 'DEMO' file.
-    :return: A set of PRIMARYID strings that should be kept after deduplication.
+        def _get(self, key: str) -> str:
+            try:
+                return self.row[self._headers.index(key)]
+            except (ValueError, IndexError):
+                return ""
+
+        def __lt__(self, other: "SortableRow") -> bool:
+            if self.caseid != other.caseid:
+                return self.caseid < other.caseid
+            if self.fda_dt != other.fda_dt:
+                return self.fda_dt > other.fda_dt  # Note: Descending order
+            if self.primaryid != other.primaryid:
+                return self.primaryid > other.primaryid  # Note: Descending order
+            return False
+
+    _readers = [open(f, 'r', newline='', encoding='utf-8') for f in file_paths]
+    try:
+        iterators = [csv.reader(r, delimiter='$') for r in _readers]
+        headers_list = [next(it) for it in iterators]
+
+        if not headers_list:
+            logger.warning("No files to merge.")
+            return
+
+        # Wrap each row in the sortable class
+        wrapped_iterators = [
+            (SortableRow(row, headers) for row in it)
+            for it, headers in zip(iterators, headers_list)
+        ]
+
+        merged_iterator = heapq.merge(*wrapped_iterators)
+
+        with output_path.open('w', newline='', encoding='utf-8') as f_out:
+            writer = csv.writer(f_out, delimiter='$')
+            writer.writerow(headers_list[0])  # Write header
+            for wrapped_row in merged_iterator:
+                writer.writerow(wrapped_row.row)
+
+    finally:
+        for r in _readers:
+            r.close()
+
+def stream_deduplicate_sorted_file(sorted_demo_path: Path) -> Set[str]:
+    """
+    Reads a sorted DEMO file and yields the primaryid of records to keep.
+    The file must be sorted by caseid (asc), fda_dt (desc), and primaryid (desc).
+    """
+    logger.info(f"Performing streaming deduplication on {sorted_demo_path}.")
+    primaryids_to_keep = set()
+    current_caseid = None
+
+    with sorted_demo_path.open('r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='$')
+        try:
+            headers = next(reader)
+            caseid_idx = headers.index('caseid')
+            primaryid_idx = headers.index('primaryid')
+        except (StopIteration, ValueError):
+            logger.warning(f"File {sorted_demo_path} is empty or has no header.")
+            return set()
+
+        for row in reader:
+            caseid = row[caseid_idx]
+            if caseid != current_caseid:
+                # This is the first time we see this caseid.
+                # Because the file is sorted, this row is the best one for this case.
+                primaryids_to_keep.add(row[primaryid_idx])
+                current_caseid = caseid
+
+    logger.info(f"Streaming deduplication complete. {len(primaryids_to_keep)} unique cases to keep.")
+    return primaryids_to_keep
+
+
+def deduplicate_records_in_memory(demo_records: List[Dict[str, Any]]) -> Set[str]:
+    """
+    Applies the FDA-recommended deduplication logic to an in-memory list of records.
+    This function uses pandas and is intended for smaller datasets (e.g., ASCII files).
+
+    :param demo_records: A list of dictionaries, where each dictionary represents a record.
+    :return: A set of PRIMARYID strings that should be kept.
     """
     if not demo_records:
         return set()
 
-    logger.info(f"Starting deduplication for {len(demo_records)} records.")
-
-    # Create a DataFrame from the records
+    logger.info(f"Starting in-memory deduplication for {len(demo_records)} records.")
     df = pd.DataFrame(demo_records)
 
-    # Ensure required columns are present
     required_cols = {'caseid', 'primaryid', 'fda_dt'}
     if not required_cols.issubset(df.columns):
         missing_cols = required_cols - set(df.columns)
-        raise ValueError(f"Input data is missing required columns: {missing_cols}")
+        raise ValueError(f"Input data is missing required columns for deduplication: {missing_cols}")
 
-    # Convert columns to appropriate types for sorting
-    # Using errors='coerce' will turn unparseable values into NaT/NaN
+    # Convert types, coercing errors to nulls
     df['caseid'] = pd.to_numeric(df['caseid'], errors='coerce')
     df['primaryid'] = pd.to_numeric(df['primaryid'], errors='coerce')
     df['fda_dt'] = pd.to_datetime(df['fda_dt'], format='%Y%m%d', errors='coerce')
-
-    # Drop rows where key fields could not be parsed
     df.dropna(subset=['caseid', 'primaryid', 'fda_dt'], inplace=True)
 
-    # Sort by the deduplication criteria
-    # Ascending=False gives us descending order, so the "max" values are first
+    # Sort by the deduplication criteria: caseid asc, fda_dt desc, primaryid desc
     df.sort_values(
         by=['caseid', 'fda_dt', 'primaryid'],
         ascending=[True, False, False],
         inplace=True
     )
 
-    # Drop duplicates based on caseid, keeping the first entry, which is the
-    # one with the max fda_dt and primaryid due to the sort.
     df_deduplicated = df.drop_duplicates(subset='caseid', keep='first')
-
-    # The 'primaryid' column now contains the IDs of the records to keep.
-    # Convert to integer first to remove decimals, then to string.
     primary_ids_to_keep = set(df_deduplicated['primaryid'].astype(int).astype(str))
 
-    logger.info(f"Deduplication complete. {len(primary_ids_to_keep)} unique cases to keep.")
-
+    logger.info(f"In-memory deduplication complete. {len(primary_ids_to_keep)} unique cases to keep.")
     return primary_ids_to_keep

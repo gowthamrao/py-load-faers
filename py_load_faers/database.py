@@ -3,7 +3,8 @@
 This module defines the abstract base class for all database loaders.
 """
 from abc import ABC, abstractmethod
-from typing import IO, List, Any, Dict, Optional
+from pathlib import Path
+from typing import List, Any, Dict, Optional
 
 
 class AbstractDatabaseLoader(ABC):
@@ -41,33 +42,33 @@ class AbstractDatabaseLoader(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def execute_native_bulk_load(
-        self, table_name: str, data_source: IO[bytes], options: Dict[str, Any]
-    ) -> None:
+    def execute_native_bulk_load(self, table_name: str, file_path: Path) -> None:
         """
-        Execute a native bulk load operation.
+        Execute a native bulk load operation from a file.
 
         :param table_name: The name of the target table.
-        :param data_source: A file-like object (stream) containing the data.
-        :param options: A dictionary of database-specific options for the load.
+        :param file_path: The path to the source data file (e.g., CSV).
         """
         raise NotImplementedError
 
     @abstractmethod
-    def execute_deletions(self, case_ids: List[int]) -> None:
+    def execute_deletions(self, case_ids: List[str]) -> int:
         """
         Delete records from the database based on a list of CASEIDs.
 
         :param case_ids: A list of case IDs to be deleted.
+        :return: The number of records deleted.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def handle_delta_merge(self, staging_details: Dict[str, Any]) -> None:
+    def handle_delta_merge(self, caseids_to_upsert: List[str], data_sources: Dict[str, Path]) -> None:
         """
-        Merge new data from a staging area into the final tables for a delta load.
+        Merge new data from staged files into the final tables for a delta load.
 
-        :param staging_details: Details about the staged data to be merged.
+        This involves deleting old versions of cases and bulk-loading new versions.
+        :param caseids_to_upsert: A list of case IDs that will be updated or inserted.
+        :param data_sources: A dictionary mapping table names to their source file paths.
         """
         raise NotImplementedError
 
