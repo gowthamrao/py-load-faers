@@ -112,7 +112,18 @@ class FaersLoaderEngine:
             if not zip_path:
                 raise RuntimeError(f"Download failed for quarter {quarter}.")
 
-            # 2. Parse all data from the zip into memory
+            # 2. Detect format and delegate processing
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                filenames = [f.lower() for f in zf.namelist()]
+                is_xml = any(f.endswith('.xml') for f in filenames)
+
+            if is_xml:
+                # Delegate to the new XML processing method
+                self._process_xml_quarter(zip_path, metadata)
+                # The XML processor will update metadata and clean up, so we can return
+                return
+
+            # --- Original ASCII Logic (Untouched) ---
             all_records = self._parse_all_from_zip(zip_path)
             metadata["rows_extracted"] = sum(len(records) for records in all_records.values())
 
@@ -189,3 +200,70 @@ class FaersLoaderEngine:
                 except StopIteration:
                     logger.warning(f"Could not find data file for table '{table_name}' in {zip_path}")
         return all_records
+
+    def _process_xml_quarter(self, zip_path: Path, metadata: Dict[str, Any]):
+        """A new, separate method to process a quarter with XML data."""
+        from .parser import parse_xml_file
+
+        logger.info(f"Processing XML quarter from {zip_path}")
+        all_records = {name: [] for name in FAERS_TABLE_MODELS.keys()}
+        caseids_for_deletion = set()
+
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                xml_filename = next(f for f in zf.namelist() if f.lower().endswith('.xml'))
+                with zf.open(xml_filename) as xml_stream:
+                    # The lxml parser can handle a raw byte stream
+                    record_iterator, nullified_ids = parse_xml_file(xml_stream)
+                    caseids_for_deletion.update(nullified_ids)
+                    for report in record_iterator:
+                        for table_name, records in report.items():
+                            all_records[table_name].extend(records)
+
+            metadata["rows_extracted"] = sum(len(records) for records in all_records.values())
+
+            # This logic now mirrors the original ASCII path carefully
+            demo_records = all_records.get("demo", [])
+            if not demo_records:
+                logger.warning("No DEMO records found in XML. Skipping.")
+                metadata["status"] = "SUCCESS"
+                self.db_loader.update_load_history(metadata)
+                return
+
+            primaryids_to_keep = deduplicate_records(demo_records)
+
+            final_records = {}
+            total_rows_loaded = 0
+            for table_name, records in all_records.items():
+                filtered = [r for r in records if r.get('primaryid') in primaryids_to_keep]
+                final_records[table_name] = filtered
+                total_rows_loaded += len(filtered)
+            metadata["rows_loaded"] = total_rows_loaded
+
+            data_sources = {}
+            for table_name, records in final_records.items():
+                if records:
+                    model = FAERS_TABLE_MODELS[table_name]
+                    string_io = stage_data_for_copy(iter(records), model)
+                    data_sources[table_name] = io.BytesIO(string_io.read().encode('utf-8'))
+
+            # Correctly derive the caseids to upsert from the *deduplicated* records
+            final_demo_records = final_records.get("demo", [])
+            caseids_to_upsert = {r['caseid'] for r in final_demo_records}
+
+            # Combine explicit deletions from nullification flags with those from delta logic
+            if caseids_for_deletion:
+                deleted_count = self.db_loader.execute_deletions(list(caseids_for_deletion))
+                metadata["rows_deleted"] = deleted_count
+
+            if caseids_to_upsert:
+                self.db_loader.handle_delta_merge(list(caseids_to_upsert), data_sources)
+
+            metadata["status"] = "SUCCESS"
+        except Exception as e:
+            metadata["status"] = "FAILED"
+            # Re-raise the exception so it's caught by the main run_load handler
+            raise e
+        finally:
+            # The main handler will update metadata and clean up the zip
+            pass
