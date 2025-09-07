@@ -3,7 +3,8 @@
 This module provides the PostgreSQL implementation of the AbstractDatabaseLoader.
 """
 import logging
-from typing import IO, Any, Dict, List, Optional, Type
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel
 
 import psycopg
@@ -135,17 +136,20 @@ class PostgresLoader(AbstractDatabaseLoader):
         );
         """
 
-    def execute_native_bulk_load(self, table_name: str, data_source: IO[bytes]) -> None:
+    def execute_native_bulk_load(self, table_name: str, file_path: Path) -> None:
         """
-        Load data into PostgreSQL using the COPY command.
+        Load data into PostgreSQL using the COPY command from a file.
 
         :param table_name: The name of the target table.
-        :param data_source: A file-like object (stream) containing the CSV data.
+        :param file_path: The path to the source CSV file.
         """
         if not self.conn:
             raise ConnectionError("No database connection available.")
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            logger.info(f"Skipping bulk load for table '{table_name}' as source file is empty or missing: {file_path}")
+            return
 
-        logger.info(f"Starting native bulk load into table '{table_name}'...")
+        logger.info(f"Starting native bulk load into table '{table_name}' from {file_path}...")
         copy_sql = f"""
             COPY {table_name} FROM STDIN (
                 FORMAT CSV,
@@ -156,8 +160,9 @@ class PostgresLoader(AbstractDatabaseLoader):
         """
         with self.conn.cursor() as cur:
             with cur.copy(copy_sql) as copy:
-                while data := data_source.read(8192):
-                    copy.write(data)
+                with open(file_path, 'rb') as f:
+                    while data := f.read(8192):
+                        copy.write(data)
 
         logger.info(f"Bulk load into table '{table_name}' complete.")
 
@@ -203,13 +208,12 @@ class PostgresLoader(AbstractDatabaseLoader):
         logger.info(f"Total rows deleted across all tables: {total_rows_deleted}")
         return total_rows_deleted
 
-    def handle_delta_merge(self, case_ids_to_upsert: List[str], data_sources: Dict[str, IO[bytes]]) -> None:
+    def handle_delta_merge(self, case_ids_to_upsert: List[str], data_sources: Dict[str, Path]) -> None:
         """
         Handles a delta load by deleting existing case versions and bulk inserting new ones.
 
         :param case_ids_to_upsert: A list of caseid strings that are new or updated.
-        :param data_sources: A dictionary mapping table names to file-like objects
-                             containing the new data for that table.
+        :param data_sources: A dictionary mapping table names to their source file paths.
         """
         if not self.conn:
             raise ConnectionError("No database connection available.")
@@ -223,14 +227,9 @@ class PostgresLoader(AbstractDatabaseLoader):
         # Now, bulk load the new data for each table.
         faers_tables = ["demo", "drug", "reac", "outc", "rpsr", "ther", "indi"]
         for table in faers_tables:
-            data_stream = data_sources.get(table)
-            if data_stream:
-                # Check if stream has content by checking its size
-                data_stream.seek(0, 2)  # Move to the end of the stream
-                size = data_stream.tell()
-                data_stream.seek(0)  # Rewind to the beginning
-                if size > 0:
-                    self.execute_native_bulk_load(table, data_stream)
+            file_path = data_sources.get(table)
+            if file_path:
+                self.execute_native_bulk_load(table, file_path)
 
     def update_load_history(self, metadata: Dict[str, Any]) -> None:
         """

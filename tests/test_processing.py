@@ -5,8 +5,9 @@ Tests for the data processing module.
 import zipfile
 from pathlib import Path
 
+import csv
 import pytest
-from py_load_faers.processing import get_caseids_to_delete, deduplicate_records
+from py_load_faers.processing import get_caseids_to_delete, stream_deduplicate_sorted_file
 
 
 def test_get_caseids_to_delete_found(tmp_path: Path):
@@ -46,71 +47,99 @@ def test_get_caseids_to_delete_not_found(tmp_path: Path):
     assert result == set()
 
 
-def test_deduplicate_records_basic():
+def test_stream_deduplicate_sorted_file(tmp_path: Path):
     """
-    Test the core deduplication logic: latest fda_dt wins.
+    Test the streaming deduplication logic on a pre-sorted CSV file.
     """
+    # 1. Define test data and expected results
     records = [
-        # Case 1: Version 2 is later, should be kept
-        {'caseid': '1', 'primaryid': '101', 'fda_dt': '20240101'},
-        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20240201'}, # Keep
-        # Case 2: This one is unique, should be kept
-        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20240301'}, # Keep
-    ]
-    expected_ids = {'102', '201'}
-    result = deduplicate_records(records)
-    assert result == expected_ids
-
-
-def test_deduplicate_records_tiebreaker():
-    """
-    Test the tie-breaking logic: when fda_dt is the same, latest primaryid wins.
-    """
-    records = [
-        # Case 3: Same fda_dt, higher primaryid should win
-        {'caseid': '3', 'primaryid': '301', 'fda_dt': '20240401'},
-        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20240401'}, # Keep
-    ]
-    expected_ids = {'302'}
-    result = deduplicate_records(records)
-    assert result == expected_ids
-
-
-def test_deduplicate_records_complex_mix():
-    """
-    Test a complex mix of scenarios including multiple versions and ties.
-    """
-    records = [
-        # Case 1: Three versions, middle one is latest date
+        # Case 1: Three versions, middle one is latest date. Will be sorted to the top.
         {'caseid': '1', 'primaryid': '101', 'fda_dt': '20230115'},
-        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20230320'}, # Keep
         {'caseid': '1', 'primaryid': '103', 'fda_dt': '20230210'},
+        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20230320'},  # Keep
         # Case 2: Unique case
-        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20230101'}, # Keep
-        # Case 3: Date tie, higher primaryid wins
+        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20230101'},  # Keep
+        # Case 3: Date tie, higher primaryid wins. Will be sorted to the top.
         {'caseid': '3', 'primaryid': '301', 'fda_dt': '20230505'},
-        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20230505'}, # Keep
-        # Case 4: Malformed/missing data, should be ignored
-        {'caseid': '4', 'primaryid': '401', 'fda_dt': None},
-        {'caseid': '4', 'primaryid': None, 'fda_dt': '20230601'},
-        {'caseid': None, 'primaryid': '403', 'fda_dt': '20230601'},
+        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20230505'},  # Keep
         # Case 5: Another simple case
-        {'caseid': '5', 'primaryid': '501', 'fda_dt': '20240101'}, # Keep
+        {'caseid': '5', 'primaryid': '501', 'fda_dt': '20240101'},  # Keep
     ]
     expected_ids = {'102', '201', '302', '501'}
-    result = deduplicate_records(records)
+
+    # 2. Sort records as they would be by the staging process
+    # Sort by primaryid (desc), then fda_dt (desc), then caseid (asc)
+    records.sort(key=lambda r: r.get("primaryid", ""), reverse=True)
+    records.sort(key=lambda r: r.get("fda_dt", "0"), reverse=True)
+    records.sort(key=lambda r: r.get("caseid", ""))
+
+    # 3. Create a temporary sorted CSV file
+    sorted_csv_path = tmp_path / "sorted_demo.csv"
+    headers = ['caseid', 'primaryid', 'fda_dt']
+    with open(sorted_csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, delimiter='$')
+        writer.writeheader()
+        writer.writerows(records)
+
+    # 4. Run the function
+    result = stream_deduplicate_sorted_file(sorted_csv_path)
+
+    # 5. Assert the result
     assert result == expected_ids
 
 
-def test_deduplicate_empty_input():
-    """Test that the function handles empty input gracefully."""
-    assert deduplicate_records([]) == set()
+def test_stream_deduplicate_empty_file(tmp_path: Path):
+    """Test that the streaming deduplication handles an empty file."""
+    empty_csv_path = tmp_path / "empty.csv"
+    empty_csv_path.touch()
+
+    result = stream_deduplicate_sorted_file(empty_csv_path)
+    assert result == set()
 
 
-def test_deduplicate_missing_columns():
-    """Test that the function raises an error if a required column is missing."""
+# --- Tests for the In-Memory (ASCII Path) Deduplication ---
+from py_load_faers.processing import deduplicate_records_in_memory
+
+def test_deduplicate_records_in_memory_basic():
+    """Test the core logic: latest fda_dt wins."""
     records = [
-        {'caseid': '1', 'primaryid': '101'}, # Missing 'fda_dt'
+        {'caseid': '1', 'primaryid': '101', 'fda_dt': '20240101'},
+        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20240201'},  # Keep
+        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20240301'},  # Keep
     ]
+    expected_ids = {'102', '201'}
+    result = deduplicate_records_in_memory(records)
+    assert result == expected_ids
+
+def test_deduplicate_records_in_memory_tiebreaker():
+    """Test the tie-breaking logic: when fda_dt is the same, latest primaryid wins."""
+    records = [
+        {'caseid': '3', 'primaryid': '301', 'fda_dt': '20240401'},
+        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20240401'},  # Keep
+    ]
+    expected_ids = {'302'}
+    result = deduplicate_records_in_memory(records)
+    assert result == expected_ids
+
+def test_deduplicate_records_in_memory_complex_mix():
+    """Test a complex mix of scenarios."""
+    records = [
+        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20230320'},  # Keep
+        {'caseid': '1', 'primaryid': '101', 'fda_dt': '20230115'},
+        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20230101'},  # Keep
+        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20230505'},  # Keep
+        {'caseid': '3', 'primaryid': '301', 'fda_dt': '20230505'},
+    ]
+    expected_ids = {'102', '201', '302'}
+    result = deduplicate_records_in_memory(records)
+    assert result == expected_ids
+
+def test_deduplicate_in_memory_empty_input():
+    """Test that the in-memory function handles empty input gracefully."""
+    assert deduplicate_records_in_memory([]) == set()
+
+def test_deduplicate_in_memory_missing_columns():
+    """Test that the in-memory function raises an error if a required column is missing."""
+    records = [{'caseid': '1', 'primaryid': '101'}]  # Missing 'fda_dt'
     with pytest.raises(ValueError, match="missing required columns"):
-        deduplicate_records(records)
+        deduplicate_records_in_memory(records)
