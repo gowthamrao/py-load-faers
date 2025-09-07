@@ -1,0 +1,73 @@
+<ichicsr>
+  <!-- CASE-001: A complete case with one of everything -->
+  <safetyreport>
+    <safetyreportid>CASE-001</safetyreportid>
+    <receiptdate>20250101</receiptdate>
+    <occurcountry>US</occurcountry>
+    <primarysource>
+      <reportercountry>US</reportercountry>
+      <qualification>5</qualification> <!-- RPSR: rpsr_cod -->
+    </primarysource>
+    <patient>
+      <patientsex>F</patientsex>
+      <patientonsetage>50</patientonsetage>
+      <patientonsetageunit>801</patientonsetageunit> <!-- age_cod: 801=Year -->
+      <reaction>
+        <reactionmeddrapt>Nausea</reactionmeddrapt> <!-- REAC: pt -->
+      </reaction>
+      <drug>
+        <drugsequencenumber>1</drugsequencenumber> <!-- drug_seq -->
+        <drugcharacterization>1</drugcharacterization> <!-- role_cod -->
+        <medicinalproduct>Aspirin</medicinalproduct> <!-- drugname -->
+        <drugindication><indicationmeddrapt>PAIN</indicationmeddrapt></drugindication> <!-- INDI: indi_pt -->
+        <drugstartdate>20250101</drugstartdate> <!-- THER: start_dt -->
+      </drug>
+    </patient>
+    <summary>
+      <result>DE</result> <!-- OUTC: outc_cod (DE=Death) -->
+    </summary>
+  </safetyreport>
+
+  <!-- CASE-002: A case with multiple drugs and reactions -->
+  <safetyreport>
+    <safetyreportid>CASE-002</safetyreportid>
+    <receiptdate>20250102</receiptdate>
+    <occurcountry>CA</occurcountry>
+    <primarysource>
+      <reportercountry>CA</reportercountry>
+      <qualification>1</qualification> <!-- RPSR: rpsr_cod -->
+    </primarysource>
+    <patient>
+      <patientsex>M</patientsex>
+      <patientonsetage>65</patientonsetage>
+      <patientonsetageunit>801</patientonsetageunit>
+      <reaction>
+        <reactionmeddrapt>Dizziness</reactionmeddrapt> <!-- REAC -->
+      </reaction>
+      <reaction>
+        <reactionmeddrapt>Fatigue</reactionmeddrapt> <!-- REAC -->
+      </reaction>
+      <drug>
+        <drugsequencenumber>1</drugsequencenumber>
+        <drugcharacterization>1</drugcharacterization>
+        <medicinalproduct>Lisinopril</medicinalproduct>
+        <drugindication><indicationmeddrapt>HYPERTENSION</indicationmeddrapt></drugindication>
+      </drug>
+      <drug>
+        <drugsequencenumber>2</drugsequencenumber>
+        <drugcharacterization>2</drugcharacterization> <!-- Concomitant -->
+        <medicinalproduct>Tylenol</medicinalproduct>
+        <drugindication><indicationmeddrapt>HEADACHE</indicationmeddrapt></drugindication>
+      </drug>
+    </patient>
+    <summary>
+      <result>OT</result> <!-- OUTC: outc_cod (OT=Other) -->
+    </summary>
+  </safetyreport>
+
+  <!-- CASE-003: A nullified case -->
+  <safetyreport>
+    <safetyreportid>CASE-003</safetyreportid>
+    <safetyreportnullification>1</safetyreportnullification>
+  </safetyreport>
+</ichicsr>

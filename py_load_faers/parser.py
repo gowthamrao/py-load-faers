@@ -5,9 +5,103 @@ This module provides functions for parsing FAERS data files.
 import csv
 import logging
 from pathlib import Path
-from typing import IO, Iterator, Dict, Any
+from typing import IO, Iterator, Dict, Any, Tuple, Set
 
 logger = logging.getLogger(__name__)
+
+
+def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
+    """
+    Parses a FAERS XML data file from a stream using a memory-efficient approach.
+
+    :param xml_stream: A file-like object (stream) containing the XML data.
+    :return: A tuple containing an iterator for safety reports and a set of nullified case IDs.
+    """
+    from lxml import etree
+    from typing import Tuple, Set
+
+    logger.info("Parsing XML stream with full table extraction.")
+    nullified_case_ids: Set[str] = set()
+
+    def element_text(elem, path, default=None):
+        node = elem.find(path)
+        return node.text if node is not None and node.text is not None else default
+
+    def record_generator():
+        try:
+            context = etree.iterparse(xml_stream, events=('end',), tag='safetyreport')
+            for event, elem in context:
+                report_id = element_text(elem, 'safetyreportid')
+                if not report_id:
+                    elem.clear()
+                    continue
+
+                if element_text(elem, 'safetyreportnullification') == '1':
+                    nullified_case_ids.add(report_id)
+                    elem.clear()
+                    continue
+
+                report_records = {
+                    "demo": [], "drug": [], "reac": [], "outc": [],
+                    "rpsr": [], "ther": [], "indi": []
+                }
+                patient = elem.find('patient')
+                summary = elem.find('summary')
+
+                report_records['demo'].append({
+                    'primaryid': report_id, 'caseid': report_id,
+                    'fda_dt': element_text(elem, 'receiptdate'),
+                    'sex': element_text(patient, 'patientsex'),
+                    'age': element_text(patient, 'patientonsetage'),
+                    'age_cod': element_text(patient, 'patientonsetageunit'),
+                    'reporter_country': element_text(elem, 'primarysource/reportercountry'),
+                    'occr_country': element_text(elem, 'occurcountry'),
+                })
+
+                primary_source = elem.find('primarysource')
+                if primary_source is not None:
+                    report_records['rpsr'].append({
+                        'primaryid': report_id, 'caseid': report_id,
+                        'rpsr_cod': element_text(primary_source, 'qualification'),
+                    })
+
+                if patient is not None:
+                    for drug in patient.findall('drug'):
+                        drug_seq = element_text(drug, 'drugsequencenumber')
+                        report_records['drug'].append({
+                            'primaryid': report_id, 'caseid': report_id, 'drug_seq': drug_seq,
+                            'role_cod': element_text(drug, 'drugcharacterization'),
+                            'drugname': element_text(drug, 'medicinalproduct'),
+                        })
+                        indication = drug.find('drugindication/indicationmeddrapt')
+                        if indication is not None:
+                            report_records['indi'].append({
+                                'primaryid': report_id, 'caseid': report_id, 'indi_drug_seq': drug_seq,
+                                'indi_pt': indication.text,
+                            })
+                        report_records['ther'].append({
+                            'primaryid': report_id, 'caseid': report_id, 'dsg_drug_seq': drug_seq,
+                            'start_dt': element_text(drug, 'drugstartdate'),
+                        })
+                    for reaction in patient.findall('reaction'):
+                        report_records['reac'].append({
+                            'primaryid': report_id, 'caseid': report_id,
+                            'pt': element_text(reaction, 'reactionmeddrapt'),
+                        })
+                if summary is not None:
+                    report_records['outc'].append({
+                        'primaryid': report_id, 'caseid': report_id,
+                        'outc_cod': element_text(summary, 'result'),
+                    })
+                yield report_records
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+            del context
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during XML parsing: {e}", exc_info=True)
+            raise
+    return record_generator(), nullified_case_ids
 
 def parse_ascii_file(file_path: Path, encoding: str = 'utf-8') -> Iterator[Dict[str, Any]]:
     """
