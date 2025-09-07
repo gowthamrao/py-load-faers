@@ -40,14 +40,7 @@ def download(
     logger.info("Download process finished.")
 
 
-import tempfile
-import zipfile
-from pathlib import Path
-import io
-
-from . import staging
-from . import models
-from . import parser
+from .engine import FaersLoaderEngine
 
 @app.command()
 def run(
@@ -56,68 +49,24 @@ def run(
     ),
     profile: str = typer.Option("dev", "--profile", "-p", help="The configuration profile to use."),
 ):
-    """Download, parse, and load a full FAERS quarter into the database."""
+    """Download, parse, deduplicate, and load a full FAERS quarter."""
     settings = config.load_config(profile=profile)
-    loader = PostgresLoader(settings.db)
+
+    # This will be replaced with a dynamic loader factory in the future
+    if settings.db.type != "postgresql":
+        logger.error(f"Unsupported database type: {settings.db.type}. Only 'postgresql' is currently supported.")
+        raise typer.Exit(code=1)
+
+    db_loader = PostgresLoader(settings.db)
+
+    engine = FaersLoaderEngine(config=settings, db_loader=db_loader)
 
     try:
-        # 1. Download
-        logger.info(f"Starting ETL process for quarter {quarter}")
-        zip_path = downloader.download_quarter(quarter, settings.downloader)
-        if not zip_path:
-            raise Exception("Download failed.")
-
-        # 2. Unzip and process
-        with tempfile.TemporaryDirectory() as temp_dir:
-            logger.info(f"Unzipping {zip_path} to {temp_dir}")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-
-            # 3. Load data in a single transaction
-            loader.connect()
-            loader.begin_transaction()
-
-            table_map = {
-                "demo": models.Demo, "drug": models.Drug, "reac": models.Reac,
-                "outc": models.Outc, "rpsr": models.Rpsr, "ther": models.Ther,
-                "indi": models.Indi,
-            }
-
-            for table_name, model in table_map.items():
-                # Find the text file for the table (e.g., DEMO25Q1.txt)
-                file_pattern = f"{table_name.upper()}{quarter.replace('q', '')}*.txt"
-                data_files = list(Path(temp_dir).glob(f"**/{file_pattern}"))
-
-                if not data_files:
-                    logger.warning(f"No data file found for table '{table_name}' with pattern '{file_pattern}'. Skipping.")
-                    continue
-
-                data_file = data_files[0]
-
-                # 4. Parse, Stage, and Load
-                logger.info(f"Processing {data_file} for table '{table_name}'")
-                parsed_records = parser.parse_ascii_file(data_file)
-                staged_buffer = staging.stage_data_for_copy(parsed_records, model)
-
-                # Convert StringIO to BytesIO for the loader
-                bytes_buffer = io.BytesIO(staged_buffer.getvalue().encode('utf-8'))
-
-                loader.execute_native_bulk_load(table_name, bytes_buffer)
-
-            logger.info("Committing transaction.")
-            loader.commit()
-
+        engine.run_load(quarter=quarter)
+        logger.info(f"Successfully loaded FAERS data for quarter {quarter}.")
     except Exception as e:
         logger.error(f"An error occurred during the ETL process: {e}")
-        if loader.conn and not loader.conn.autocommit:
-            logger.warning("Rolling back transaction.")
-            loader.rollback()
         raise typer.Exit(code=1)
-    finally:
-        if loader.conn:
-            loader.conn.close()
-
-    logger.info(f"Successfully loaded FAERS data for quarter {quarter}.")
 
 
 @app.command()
