@@ -44,29 +44,38 @@ from .engine import FaersLoaderEngine
 
 @app.command()
 def run(
-    quarter: str = typer.Option(
-        ..., "--quarter", "-q", help="The specific quarter to process (e.g., '2025q1')."
+    quarter: Optional[str] = typer.Option(
+        None, "--quarter", "-q", help="The specific quarter to process (e.g., '2025q1'). If not provided, the mode will determine behavior."
+    ),
+    mode: str = typer.Option(
+        "delta", "--mode", "-m", help="The load mode: 'delta' (default) or 'partial'."
     ),
     profile: str = typer.Option("dev", "--profile", "-p", help="The configuration profile to use."),
 ):
-    """Download, parse, deduplicate, and load a full FAERS quarter."""
+    """
+    Run the FAERS ETL process.
+
+    In 'delta' mode (default), it loads all new quarters since the last successful run.
+    In 'partial' mode, it loads only the specific --quarter provided.
+    """
     settings = config.load_config(profile=profile)
 
-    # This will be replaced with a dynamic loader factory in the future
     if settings.db.type != "postgresql":
         logger.error(f"Unsupported database type: {settings.db.type}. Only 'postgresql' is currently supported.")
         raise typer.Exit(code=1)
 
     db_loader = PostgresLoader(settings.db)
-
-    engine = FaersLoaderEngine(config=settings, db_loader=db_loader)
-
     try:
-        engine.run_load(quarter=quarter)
-        logger.info(f"Successfully loaded FAERS data for quarter {quarter}.")
+        db_loader.connect()
+        engine = FaersLoaderEngine(config=settings, db_loader=db_loader)
+        engine.run_load(mode=mode, quarter=quarter)
+        logger.info(f"ETL process completed successfully in '{mode}' mode.")
     except Exception as e:
         logger.error(f"An error occurred during the ETL process: {e}")
         raise typer.Exit(code=1)
+    finally:
+        if db_loader.conn:
+            db_loader.conn.close()
 
 
 @app.command()
@@ -85,11 +94,15 @@ def db_init(
 
     try:
         loader.connect()
+        loader.begin_transaction()
         logger.info("Initializing database schema...")
         loader.initialize_schema()
+        loader.commit()
         logger.info("Database schema initialization complete.")
     except Exception as e:
-        logger.error(f"An error occurred during database initialization: {e}")
+        logger.error(f"An error occurred during database initialization: {e}", exc_info=True)
+        if loader.conn:
+            loader.rollback()
         raise typer.Exit(code=1)
     finally:
         if loader.conn:

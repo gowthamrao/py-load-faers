@@ -4,19 +4,39 @@ This module contains the main ETL engine for the FAERS data loader.
 """
 import io
 import logging
+import uuid
 import zipfile
+import csv
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Generator
 
 from .config import AppSettings
 from .database import AbstractDatabaseLoader
-from .downloader import download_quarter
+from .downloader import download_quarter, find_latest_quarter
 from .models import FAERS_TABLE_MODELS
-from .parser import parse_ascii_file
 from .processing import get_caseids_to_delete, deduplicate_records
 from .staging import stage_data_for_copy
 
 logger = logging.getLogger(__name__)
+
+
+def _generate_quarters_to_load(start_quarter: Optional[str], end_quarter: str) -> Generator[str, None, None]:
+    """Generates a sequence of quarters from a start to an end point."""
+    if not start_quarter:
+        start_year, start_q = int(end_quarter[:4]), int(end_quarter[-1])
+    else:
+        start_year, start_q = int(start_quarter[:4]), int(start_quarter[-1])
+
+    end_year, end_q = int(end_quarter[:4]), int(end_quarter[-1])
+
+    current_year, current_q = start_year, start_q
+    while current_year < end_year or (current_year == end_year and current_q <= end_q):
+        yield f"{current_year}q{current_q}"
+        current_q += 1
+        if current_q > 4:
+            current_q = 1
+            current_year += 1
 
 
 class FaersLoaderEngine:
@@ -26,106 +46,146 @@ class FaersLoaderEngine:
         self.config = config
         self.db_loader = db_loader
 
-    def run_load(self, quarter: str, mode: str = "full"):
-        """
-        Runs the full ETL process for a given FAERS quarter.
-
-        :param quarter: The quarter to load (e.g., "2025q1").
-        :param mode: The load mode ('full' or 'delta'). Currently, only 'full'
-                     style processing is implemented.
-        """
-        logger.info(f"Starting FAERS load for quarter {quarter} in '{mode}' mode.")
-
-        # 1. Download
-        zip_path = download_quarter(quarter, self.config.downloader)
-        if not zip_path:
-            logger.error(f"Download failed for quarter {quarter}. Aborting.")
-            return
-
-        # 2. Process Deletions (Nullifications)
-        caseids_to_delete = get_caseids_to_delete(zip_path)
-
-        # 3. Parse all relevant files from the archive
-        # This is a simplified approach for the ASCII format.
-        # It assumes all files are in a flat structure within the zip.
-        parsed_data: Dict[str, List[Dict[str, Any]]] = {}
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            for table_name in FAERS_TABLE_MODELS.keys():
-                # FAERS files are named like 'DEMO25Q1.txt'.
-                # The quarter format is YYYYqQ, e.g., "2025q1".
-                year_short = quarter[2:4]  # e.g., "25"
-                quarter_num = quarter[-1]   # e.g., "1"
-                file_pattern = f"{table_name.upper()}{year_short}Q{quarter_num}.txt"
-
-                try:
-                    # Find the exact filename from the zip archive, case-insensitively
-                    data_filename = next(
-                        f for f in zf.namelist() if f.upper() == file_pattern.upper()
-                    )
-                    logger.info(f"Found data file: {data_filename} for table {table_name}")
-
-                    # Create a temporary path to the extracted file
-                    # This is necessary because our parser expects a Path object
-                    zf.extract(data_filename, path=self.config.downloader.download_dir)
-                    extracted_file_path = Path(self.config.downloader.download_dir) / data_filename
-
-                    records = list(parse_ascii_file(extracted_file_path))
-                    parsed_data[table_name] = records
-
-                    # Clean up extracted file
-                    extracted_file_path.unlink()
-
-                except StopIteration:
-                    logger.warning(f"Could not find data file for table '{table_name}' in {zip_path}")
-                    parsed_data[table_name] = []
-
-        if 'demo' not in parsed_data or not parsed_data['demo']:
-            logger.error("No demographic data (DEMO) found or parsed. Cannot proceed with deduplication.")
-            return
-
-        # 4. Deduplicate
-        primaryids_to_keep = deduplicate_records(parsed_data['demo'])
-
-        # 5. Filter, Stage, and Load each table's data
-        self.db_loader.connect()
+    def run_load(self, mode: str = "delta", quarter: Optional[str] = None):
+        """Runs the full ETL process."""
+        logger.info(f"Starting FAERS load in '{mode}' mode.")
         self.db_loader.begin_transaction()
         try:
-            for table_name, records in parsed_data.items():
-                logger.info(f"Processing table: {table_name}")
+            if quarter:
+                self._process_quarter(quarter, "PARTIAL")
+            elif mode == "delta":
+                last_loaded = self.db_loader.get_last_successful_load()
+                latest_available = find_latest_quarter()
+                if not latest_available:
+                    logger.warning("Could not determine the latest available quarter. Aborting.")
+                    self.db_loader.commit()
+                    return
 
-                # Filter records based on deletions and deduplication
-                filtered_records = [
-                    r for r in records
-                    if r.get('caseid') not in caseids_to_delete and
-                       r.get('primaryid') in primaryids_to_keep
-                ]
+                if last_loaded and last_loaded.lower() >= latest_available.lower():
+                    logger.info("Database is already up-to-date. No new quarters to load.")
+                    self.db_loader.commit()
+                    return
 
-                if not filtered_records:
-                    logger.info(f"No records to load for table '{table_name}' after filtering.")
-                    continue
+                start_quarter = None
+                if last_loaded:
+                    year, q = int(last_loaded[:4]), int(last_loaded[-1])
+                    q += 1
+                    if q > 4: q = 1; year += 1
+                    start_quarter = f"{year}q{q}"
+                else:
+                    logger.info("No previous successful load found. Assuming this is the first run in a delta sequence.")
+                    start_quarter = latest_available
 
-                logger.info(f"Filtered {len(records)} records down to {len(filtered_records)} for table '{table_name}'.")
-
-                # Stage data for COPY
-                model = FAERS_TABLE_MODELS[table_name]
-                staged_data_buffer = stage_data_for_copy(iter(filtered_records), model)
-
-                # Convert StringIO to a binary stream (BytesIO) for the loader
-                staged_data_bytes = io.BytesIO(staged_data_buffer.read().encode('utf-8'))
-                staged_data_buffer.close()
-
-                # Load data
-                self.db_loader.execute_native_bulk_load(table_name, staged_data_bytes)
+                quarters_to_load = _generate_quarters_to_load(start_quarter, latest_available)
+                for q_to_load in quarters_to_load:
+                    self._process_quarter(q_to_load, "DELTA")
+            else:
+                logger.error(f"Unsupported load mode: {mode}")
+                raise NotImplementedError(f"Unsupported load mode: {mode}")
 
             self.db_loader.commit()
-            logger.info("Successfully loaded all tables for quarter {quarter}.")
+            logger.info("Load process completed successfully and transaction committed.")
 
         except Exception as e:
-            logger.error(f"An error occurred during the loading process: {e}")
-            self.db_loader.rollback()
-            logger.error("Transaction has been rolled back.")
+            logger.error(f"An error occurred during the loading process: {e}", exc_info=True)
+            if self.db_loader.conn:
+                self.db_loader.rollback()
+                logger.error("Transaction has been rolled back.")
             raise
+
+    def _process_quarter(self, quarter: str, load_type: str):
+        """Downloads, processes, and loads data for a single FAERS quarter. Assumes a transaction is already open."""
+        logger.info(f"Processing quarter: {quarter}")
+        load_id = uuid.uuid4()
+        metadata = {
+            "load_id": load_id, "quarter": quarter, "load_type": load_type,
+            "start_timestamp": datetime.now(timezone.utc), "end_timestamp": None,
+            "status": "RUNNING", "source_checksum": None, "rows_extracted": 0,
+            "rows_loaded": 0, "rows_updated": 0, "rows_deleted": 0,
+        }
+        self.db_loader.update_load_history(metadata)
+
+        zip_path = None
+        try:
+            # 1. Download
+            zip_path = download_quarter(quarter, self.config.downloader)
+            if not zip_path:
+                raise RuntimeError(f"Download failed for quarter {quarter}.")
+
+            # 2. Parse all data from the zip into memory
+            all_records = self._parse_all_from_zip(zip_path)
+            metadata["rows_extracted"] = sum(len(records) for records in all_records.values())
+
+            # 3. Handle Deletions and Deduplication
+            caseids_for_explicit_deletion = get_caseids_to_delete(zip_path)
+
+            demo_records = all_records.get("demo", [])
+            if not demo_records:
+                logger.warning(f"No DEMO records found for quarter {quarter}. Skipping.")
+                metadata["status"] = "SUCCESS" # Mark as success since there's nothing to load
+                return
+
+            primaryids_to_keep = deduplicate_records(demo_records)
+
+            # 4. Filter all tables based on deduplication results
+            final_records = {}
+            total_rows_loaded = 0
+            for table_name, records in all_records.items():
+                filtered = [r for r in records if r.get('primaryid') in primaryids_to_keep]
+                final_records[table_name] = filtered
+                total_rows_loaded += len(filtered)
+            metadata["rows_loaded"] = total_rows_loaded
+
+            # 5. Stage filtered data for bulk loading
+            data_sources = {}
+            for table_name, records in final_records.items():
+                if records:
+                    model = FAERS_TABLE_MODELS[table_name]
+                    string_io = stage_data_for_copy(iter(records), model)
+                    data_sources[table_name] = io.BytesIO(string_io.read().encode('utf-8'))
+
+            # 6. Load to DB
+            caseids_to_upsert = {r['caseid'] for r in final_records["demo"]}
+
+            if caseids_for_explicit_deletion:
+                deleted_count = self.db_loader.execute_deletions(list(caseids_for_explicit_deletion))
+                metadata["rows_deleted"] = deleted_count
+
+            if caseids_to_upsert:
+                self.db_loader.handle_delta_merge(list(caseids_to_upsert), data_sources)
+
+            metadata["status"] = "SUCCESS"
+        except Exception as e:
+            metadata["status"] = "FAILED"
+            raise e
         finally:
-            # Clean up the downloaded zip file
-            zip_path.unlink()
-            logger.info(f"Cleaned up downloaded file: {zip_path}")
+            metadata["end_timestamp"] = datetime.now(timezone.utc)
+            self.db_loader.update_load_history(metadata)
+            if zip_path and zip_path.exists():
+                zip_path.unlink()
+
+    def _parse_all_from_zip(self, zip_path: Path) -> Dict[str, List[Dict[str, Any]]]:
+        """Parses all FAERS tables from a zip file directly into memory."""
+        all_records: Dict[str, List[Dict[str, Any]]] = {name: [] for name in FAERS_TABLE_MODELS.keys()}
+
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            for table_name in all_records.keys():
+                year_short = zip_path.stem.split('_')[-1][2:4]
+                q_num = zip_path.stem.split('_')[-1][-1]
+                file_pattern = f"{table_name.upper()}{year_short}Q{q_num}.txt"
+
+                try:
+                    data_filename = next(f for f in zf.namelist() if f.upper() == file_pattern.upper())
+                    with zf.open(data_filename) as f:
+                        text_stream = io.TextIOWrapper(f, encoding='utf-8', errors='ignore')
+                        reader = csv.reader(text_stream, delimiter='$')
+                        try:
+                            headers = [h.lower() for h in next(reader)]
+                            for row in reader:
+                                if len(row) == len(headers):
+                                    all_records[table_name].append(dict(zip(headers, row)))
+                        except StopIteration:
+                            logger.warning(f"File {data_filename} is empty.")
+                except StopIteration:
+                    logger.warning(f"Could not find data file for table '{table_name}' in {zip_path}")
+        return all_records

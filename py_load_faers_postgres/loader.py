@@ -76,7 +76,7 @@ class PostgresLoader(AbstractDatabaseLoader):
             logger.info(f"Executing DDL for metadata table:\n{meta_ddl}")
             cur.execute(meta_ddl)
 
-        self.commit()
+        # The caller is responsible for committing the transaction.
         logger.info("Schema initialization complete.")
 
     def _generate_create_table_ddl(self, table_name: str, model: Type[BaseModel]) -> str:
@@ -161,14 +161,140 @@ class PostgresLoader(AbstractDatabaseLoader):
 
         logger.info(f"Bulk load into table '{table_name}' complete.")
 
-    def execute_deletions(self, case_ids: List[int]) -> None:
-        raise NotImplementedError("Delta load logic is not yet implemented.")
+    def execute_deletions(self, case_ids: List[str]) -> int:
+        """
+        Delete all records associated with a list of case_ids from all FAERS tables.
 
-    def handle_delta_merge(self, staging_details: Dict[str, Any]) -> None:
-        raise NotImplementedError("Delta load logic is not yet implemented.")
+        :param case_ids: A list of caseid strings to delete.
+        :return: The total number of rows deleted.
+        """
+        if not self.conn:
+            raise ConnectionError("No database connection available.")
+        if not case_ids:
+            logger.info("No case_ids provided for deletion.")
+            return 0
+
+        logger.info(f"Starting deletion for {len(case_ids)} case_ids.")
+
+        # We need to get the corresponding primaryid values from the demo table first,
+        # as other tables are linked via primaryid.
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT primaryid FROM demo WHERE caseid = ANY(%s)", (list(case_ids),))
+            primary_ids = [row['primaryid'] for row in cur.fetchall()]
+
+        if not primary_ids:
+            logger.info("No matching primary_ids found for the given case_ids. Nothing to delete.")
+            return 0
+
+        logger.info(f"Found {len(primary_ids)} primary_ids to delete across all tables.")
+
+        total_rows_deleted = 0
+        faers_tables = ["ther", "rpsr", "reac", "outc", "indi", "drug", "demo"]
+
+        with self.conn.cursor() as cur:
+            for table in faers_tables:
+                # All tables are linked by primaryid.
+                delete_sql = f"DELETE FROM {table} WHERE primaryid = ANY(%s)"
+                cur.execute(delete_sql, (primary_ids,))
+                rows_deleted = cur.rowcount
+                total_rows_deleted += rows_deleted
+                logger.info(f"Deleted {rows_deleted} rows from table '{table}'.")
+
+        logger.info(f"Total rows deleted across all tables: {total_rows_deleted}")
+        return total_rows_deleted
+
+    def handle_delta_merge(self, case_ids_to_upsert: List[str], data_sources: Dict[str, IO[bytes]]) -> None:
+        """
+        Handles a delta load by deleting existing case versions and bulk inserting new ones.
+
+        :param case_ids_to_upsert: A list of caseid strings that are new or updated.
+        :param data_sources: A dictionary mapping table names to file-like objects
+                             containing the new data for that table.
+        """
+        if not self.conn:
+            raise ConnectionError("No database connection available.")
+
+        # First, delete all existing versions of the cases being loaded.
+        # This handles both updates (removing the old version) and ensuring
+        # idempotency if the load is re-run.
+        if case_ids_to_upsert:
+            self.execute_deletions(case_ids_to_upsert)
+
+        # Now, bulk load the new data for each table.
+        faers_tables = ["demo", "drug", "reac", "outc", "rpsr", "ther", "indi"]
+        for table in faers_tables:
+            data_stream = data_sources.get(table)
+            if data_stream:
+                # Check if stream has content by checking its size
+                data_stream.seek(0, 2)  # Move to the end of the stream
+                size = data_stream.tell()
+                data_stream.seek(0)  # Rewind to the beginning
+                if size > 0:
+                    self.execute_native_bulk_load(table, data_stream)
 
     def update_load_history(self, metadata: Dict[str, Any]) -> None:
-        raise NotImplementedError("Metadata update logic is not yet implemented.")
+        """
+        Insert or update a record in the _faers_load_history table.
+
+        :param metadata: A dictionary containing the metadata to record.
+        """
+        if not self.conn:
+            raise ConnectionError("No database connection available.")
+
+        logger.debug(f"Updating load history with metadata: {metadata}")
+
+        # SQL to insert or update the load history record
+        sql = """
+            INSERT INTO _faers_load_history (
+                load_id, quarter, load_type, start_timestamp, end_timestamp,
+                status, source_checksum, rows_extracted, rows_loaded,
+                rows_updated, rows_deleted
+            ) VALUES (
+                %(load_id)s, %(quarter)s, %(load_type)s, %(start_timestamp)s, %(end_timestamp)s,
+                %(status)s, %(source_checksum)s, %(rows_extracted)s, %(rows_loaded)s,
+                %(rows_updated)s, %(rows_deleted)s
+            )
+            ON CONFLICT (load_id) DO UPDATE SET
+                end_timestamp = EXCLUDED.end_timestamp,
+                status = EXCLUDED.status,
+                source_checksum = EXCLUDED.source_checksum,
+                rows_extracted = EXCLUDED.rows_extracted,
+                rows_loaded = EXCLUDED.rows_loaded,
+                rows_updated = EXCLUDED.rows_updated,
+                rows_deleted = EXCLUDED.rows_deleted;
+        """
+
+        with self.conn.cursor() as cur:
+            cur.execute(sql, metadata)
+        logger.info(f"Load history updated for load_id {metadata.get('load_id')}.")
+
 
     def get_last_successful_load(self) -> Optional[str]:
-        raise NotImplementedError("Delta load logic is not yet implemented.")
+        """
+        Retrieve the identifier of the last successfully loaded quarter.
+
+        :return: The quarter string (e.g., "2025Q3") or None if no successful loads.
+        """
+        if not self.conn:
+            raise ConnectionError("No database connection available.")
+
+        logger.info("Querying for the last successful load...")
+
+        sql = """
+            SELECT quarter
+            FROM _faers_load_history
+            WHERE status = 'SUCCESS'
+            ORDER BY quarter DESC
+            LIMIT 1;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(sql)
+            result = cur.fetchone()
+
+        if result:
+            last_quarter = result["quarter"]
+            logger.info(f"Last successful load was for quarter: {last_quarter}")
+            return last_quarter
+        else:
+            logger.info("No successful loads found in history.")
+            return None
