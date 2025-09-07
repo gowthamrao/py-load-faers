@@ -54,9 +54,9 @@ def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer
     db_settings = DatabaseSettings(
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
-        user=postgres_container.username,
-        password=postgres_container.password,
-        dbname=postgres_container.dbname,
+        user="test",
+        password="test",
+        dbname="test",
     )
 
     loader = PostgresLoader(db_settings)
@@ -93,16 +93,16 @@ def test_run_command_end_to_end(postgres_container: PostgresContainer, sample_fa
     """
     Test the full end-to-end 'run' command, from download to database load.
     """
-    # Mock the downloader to use our local zip file
-    mocker.patch("py_load_faers.downloader.download_quarter", return_value=sample_faers_zip)
+    # Mock the downloader where it's used: in the engine module.
+    mocker.patch("py_load_faers.engine.download_quarter", return_value=sample_faers_zip)
 
     # Get DB settings from the container
     db_settings = DatabaseSettings(
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
-        user=postgres_container.username,
-        password=postgres_container.password,
-        dbname=postgres_container.dbname,
+        user="test",
+        password="test",
+        dbname="test",
     )
 
     # Use CliRunner to invoke the CLI commands

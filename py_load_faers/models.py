@@ -102,3 +102,15 @@ class Indi(BaseModel):
     caseid: str
     indi_drug_seq: str
     indi_pt: str
+
+
+# Mapping of FAERS table names to their Pydantic models
+FAERS_TABLE_MODELS = {
+    "demo": Demo,
+    "drug": Drug,
+    "reac": Reac,
+    "outc": Outc,
+    "rpsr": Rpsr,
+    "ther": Ther,
+    "indi": Indi,
+}
