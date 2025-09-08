@@ -31,13 +31,18 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
         try:
             context = etree.iterparse(xml_stream, events=('end',), tag='safetyreport')
             for event, elem in context:
-                report_id = element_text(elem, 'safetyreportid')
-                if not report_id:
+                primary_id = element_text(elem, 'safetyreportid')
+                # Per ICH E2B, the caseid is nested. Using the path from our test data.
+                case_id = element_text(elem, 'case/caseid')
+
+                if not primary_id or not case_id:
+                    # If we don't have the core identifiers, skip the record.
                     elem.clear()
                     continue
 
+                # If a report is nullified, the entire case is considered nullified.
                 if element_text(elem, 'safetyreportnullification') == '1':
-                    nullified_case_ids.add(report_id)
+                    nullified_case_ids.add(case_id)
                     elem.clear()
                     continue
 
@@ -49,7 +54,7 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                 summary = elem.find('summary')
 
                 report_records['demo'].append({
-                    'primaryid': report_id, 'caseid': report_id,
+                    'primaryid': primary_id, 'caseid': case_id,
                     'fda_dt': element_text(elem, 'receiptdate'),
                     'sex': element_text(patient, 'patientsex'),
                     'age': element_text(patient, 'patientonsetage'),
@@ -61,7 +66,7 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                 primary_source = elem.find('primarysource')
                 if primary_source is not None:
                     report_records['rpsr'].append({
-                        'primaryid': report_id, 'caseid': report_id,
+                        'primaryid': primary_id, 'caseid': case_id,
                         'rpsr_cod': element_text(primary_source, 'qualification'),
                     })
 
@@ -69,28 +74,28 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                     for drug in patient.findall('drug'):
                         drug_seq = element_text(drug, 'drugsequencenumber')
                         report_records['drug'].append({
-                            'primaryid': report_id, 'caseid': report_id, 'drug_seq': drug_seq,
+                            'primaryid': primary_id, 'caseid': case_id, 'drug_seq': drug_seq,
                             'role_cod': element_text(drug, 'drugcharacterization'),
                             'drugname': element_text(drug, 'medicinalproduct'),
                         })
                         indication = drug.find('drugindication/indicationmeddrapt')
                         if indication is not None:
                             report_records['indi'].append({
-                                'primaryid': report_id, 'caseid': report_id, 'indi_drug_seq': drug_seq,
+                                'primaryid': primary_id, 'caseid': case_id, 'indi_drug_seq': drug_seq,
                                 'indi_pt': indication.text,
                             })
                         report_records['ther'].append({
-                            'primaryid': report_id, 'caseid': report_id, 'dsg_drug_seq': drug_seq,
+                            'primaryid': primary_id, 'caseid': case_id, 'dsg_drug_seq': drug_seq,
                             'start_dt': element_text(drug, 'drugstartdate'),
                         })
                     for reaction in patient.findall('reaction'):
                         report_records['reac'].append({
-                            'primaryid': report_id, 'caseid': report_id,
+                            'primaryid': primary_id, 'caseid': case_id,
                             'pt': element_text(reaction, 'reactionmeddrapt'),
                         })
                 if summary is not None:
                     report_records['outc'].append({
-                        'primaryid': report_id, 'caseid': report_id,
+                        'primaryid': primary_id, 'caseid': case_id,
                         'outc_cod': element_text(summary, 'result'),
                     })
                 yield report_records

@@ -51,26 +51,20 @@ class PostgresLoader(AbstractDatabaseLoader):
         if self.conn:
             self.conn.rollback()
 
-    def initialize_schema(self) -> None:
+    def initialize_schema(self, schema_definition: Dict[str, Any]) -> None:
         """Create FAERS tables based on Pydantic models if they don't exist."""
         if not self.conn:
             raise ConnectionError("No database connection available.")
 
-        table_map = {
-            "demo": models.Demo,
-            "drug": models.Drug,
-            "reac": models.Reac,
-            "outc": models.Outc,
-            "rpsr": models.Rpsr,
-            "ther": models.Ther,
-            "indi": models.Indi,
-        }
+        # The schema_definition provides the mapping from table name to model
+        table_map = schema_definition
 
         with self.conn.cursor() as cur:
             for table_name, model in table_map.items():
-                ddl = self._generate_create_table_ddl(table_name, model)
-                logger.info(f"Executing DDL for table '{table_name}':\n{ddl}")
-                cur.execute(ddl)
+                if model:  # Ensure there is a model to generate DDL from
+                    ddl = self._generate_create_table_ddl(table_name, model)
+                    logger.info(f"Executing DDL for table '{table_name}':\n{ddl}")
+                    cur.execute(ddl)
 
             # Create metadata table
             meta_ddl = self._generate_metadata_table_ddl()
