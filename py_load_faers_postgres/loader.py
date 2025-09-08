@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 
 from py_load_faers.config import DatabaseSettings
 from py_load_faers.database import AbstractDatabaseLoader
+from py_load_faers.exceptions import DataQualityError
 from py_load_faers import models
 
 logger = logging.getLogger(__name__)
@@ -261,6 +262,39 @@ class PostgresLoader(AbstractDatabaseLoader):
             cur.execute(sql, metadata)
         logger.info(f"Load history updated for load_id {metadata.get('load_id')}.")
 
+    def run_post_load_dq_checks(self) -> None:
+        """
+        Runs post-load data quality (DQ) checks against the database.
+        As per FRD R60, this verifies the deduplication was successful.
+        """
+        if not self.conn:
+            raise ConnectionError("No database connection available.")
+
+        logger.info("Running post-load data quality checks...")
+
+        # R60: Verify that deduplication was successful.
+        # The number of unique caseids should equal the total number of rows.
+        dq_sql = "SELECT COUNT(DISTINCT caseid) as distinct_caseids, COUNT(*) as total_rows FROM demo;"
+
+        with self.conn.cursor() as cur:
+            cur.execute(dq_sql)
+            result = cur.fetchone()
+
+        if not result:
+            raise DataQualityError("Could not retrieve DQ check results from the demo table.")
+
+        distinct_caseids = result.get('distinct_caseids', 0)
+        total_rows = result.get('total_rows', -1)
+
+        if distinct_caseids == total_rows:
+            logger.info(f"DQ Check Passed: DEMO table contains {total_rows} rows, all with unique CASEIDs.")
+        else:
+            error_msg = (
+                f"DQ Check FAILED: Deduplication error detected in DEMO table. "
+                f"Found {total_rows} total rows but only {distinct_caseids} unique CASEIDs."
+            )
+            logger.error(error_msg)
+            raise DataQualityError(error_msg)
 
     def get_last_successful_load(self) -> Optional[str]:
         """

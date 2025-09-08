@@ -7,6 +7,7 @@ from testcontainers.postgres import PostgresContainer
 
 from py_load_faers.config import DatabaseSettings
 from py_load_faers_postgres.loader import PostgresLoader
+from py_load_faers.models import FAERS_TABLE_MODELS
 
 import zipfile
 from pathlib import Path
@@ -63,7 +64,7 @@ def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer
 
     # Connect and initialize the schema
     loader.connect()
-    loader.initialize_schema()
+    loader.initialize_schema(FAERS_TABLE_MODELS)
 
     # Verify that the tables were created
     expected_tables = {"demo", "drug", "reac", "outc", "rpsr", "ther", "indi", "_faers_load_history"}
@@ -141,3 +142,72 @@ def test_run_command_end_to_end(postgres_container: PostgresContainer, sample_fa
         cur.execute("SELECT drugname FROM drug WHERE primaryid = '1002'")
         assert cur.fetchone()["drugname"] == "Metformin"
     loader.conn.close()
+
+
+@pytest.fixture
+def realistic_faers_zip(tmp_path: Path) -> Path:
+    """Creates a sample FAERS quarter zip file from the realistic XML file."""
+    zip_path = tmp_path / "faers_xml_2025q2.zip"
+    xml_content = Path("tests/integration/test_data/realistic_faers.xml").read_bytes()
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("realistic_faers.xml", xml_content)
+    return zip_path
+
+
+def test_data_quality_check_passes_and_fails(postgres_container: PostgresContainer, realistic_faers_zip: Path, mocker):
+    """
+    Tests the data quality check command.
+    1. Loads good data and asserts the check passes.
+    2. Injects a duplicate and asserts the check fails.
+    """
+    from py_load_faers.exceptions import DataQualityError
+
+    mocker.patch("py_load_faers.engine.download_quarter", return_value=realistic_faers_zip)
+    mocker.patch("py_load_faers.engine.find_latest_quarter", return_value="2025q2")
+
+    db_settings = DatabaseSettings(
+        host=postgres_container.get_container_host_ip(),
+        port=postgres_container.get_exposed_port(5432),
+        user="test", password="test", dbname="test",
+    )
+    env = {
+        "PY_LOAD_FAERS_DB__HOST": db_settings.host,
+        "PY_LOAD_FAERS_DB__PORT": str(db_settings.port),
+        "PY_LOAD_FAERS_DB__USER": db_settings.user,
+        "PY_LOAD_FAERS_DB__PASSWORD": db_settings.password,
+        "PY_LOAD_FAERS_DB__DBNAME": db_settings.dbname,
+    }
+
+    runner = CliRunner()
+
+    # 1. Init DB and run the load
+    assert runner.invoke(app, ["db-init"], env=env).exit_code == 0
+    # Use delta mode to trigger the load
+    result_run = runner.invoke(app, ["run", "--mode", "delta"], env=env)
+    assert result_run.exit_code == 0
+    assert "DQ Check Passed" in result_run.stdout
+
+    # 2. Manually verify that the check passes
+    result_verify_pass = runner.invoke(app, ["db-verify"], env=env)
+    assert result_verify_pass.exit_code == 0
+    assert "DQ Check Passed" in result_verify_pass.stdout
+
+    # 3. Inject a duplicate record to make the check fail
+    loader = PostgresLoader(db_settings)
+    loader.connect()
+    with loader.conn.cursor() as cur:
+        # Get an existing record
+        cur.execute("SELECT * FROM demo LIMIT 1;")
+        record_to_duplicate = cur.fetchone()
+        # Insert it with a new primaryid but the same caseid
+        cur.execute(
+            "INSERT INTO demo (primaryid, caseid, fda_dt) VALUES (%s, %s, %s);",
+            ('DUPLICATE-PRIMARYID', record_to_duplicate['caseid'], record_to_duplicate['fda_dt'])
+        )
+        loader.commit()
+    loader.conn.close()
+
+    # 4. Manually verify that the check now fails
+    result_verify_fail = runner.invoke(app, ["db-verify"], env=env)
+    assert result_verify_fail.exit_code == 1
+    assert "DQ Check FAILED" in result_verify_fail.stdout
