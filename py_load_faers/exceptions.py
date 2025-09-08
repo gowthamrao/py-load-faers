@@ -8,4 +8,5 @@ class DataQualityError(Exception):
     """
     Custom exception raised for data quality check failures.
     """
+
     pass

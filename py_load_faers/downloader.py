@@ -7,7 +7,7 @@ import logging
 import re
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -66,7 +66,9 @@ def find_latest_quarter() -> Optional[str]:
                 quarters.append(match.group(1))
 
         if not quarters:
-            logger.warning("Could not parse any quarter strings from the download links.")
+            logger.warning(
+                "Could not parse any quarter strings from the download links."
+            )
             return None
 
         # Sort quarters to find the latest (e.g., "2025q2" > "2025q1")
@@ -79,13 +81,16 @@ def find_latest_quarter() -> Optional[str]:
         return None
 
 
-def download_quarter(quarter: str, settings: DownloaderSettings) -> Optional[Path]:
+def download_quarter(
+    quarter: str, settings: DownloaderSettings
+) -> Optional[Tuple[Path, str]]:
     """
     Download a specific FAERS quarter data file.
 
     :param quarter: The quarter to download (e.g., "2025q1").
     :param settings: The downloader configuration settings.
-    :return: The path to the downloaded file, or None if download fails.
+    :return: A tuple containing the path to the downloaded file and its
+             SHA-256 checksum, or None if download fails.
     """
     download_url = DOWNLOAD_URL_TEMPLATE.format(quarter=quarter)
     download_dir = Path(settings.download_dir)
@@ -119,7 +124,7 @@ def download_quarter(quarter: str, settings: DownloaderSettings) -> Optional[Pat
         with zipfile.ZipFile(file_path) as zf:
             if zf.testzip() is not None:
                 logger.error(f"Downloaded file {file_path} is corrupted.")
-                file_path.unlink() # Delete corrupted file
+                file_path.unlink()  # Delete corrupted file
                 return None
         logger.info(f"File {file_path} integrity verified.")
 
@@ -132,7 +137,7 @@ def download_quarter(quarter: str, settings: DownloaderSettings) -> Optional[Pat
         checksum = sha256_hash.hexdigest()
         logger.info(f"SHA-256 checksum for {file_path}: {checksum}")
 
-        return file_path
+        return file_path, checksum
 
     except requests.RequestException as e:
         logger.error(f"Failed to download {download_url}. Error: {e}")

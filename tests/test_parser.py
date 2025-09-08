@@ -11,6 +11,7 @@ PRIMARYID$CASEID$CASEVERSION$I_F_CODE$EVENT_DT$MFR_DT
 54321$98765$2$F$20250201$20250202
 """
 
+
 def test_parse_ascii_file(tmp_path: Path):
     """Test that a standard FAERS ASCII file is parsed correctly."""
     data_file = tmp_path / "DEMO25Q1.txt"
@@ -34,6 +35,7 @@ def test_parse_ascii_file(tmp_path: Path):
     assert records[1]["primaryid"] == "54321"
     assert records[1]["caseid"] == "98765"
 
+
 def test_parse_empty_file(tmp_path: Path):
     """Test that parsing an empty file yields no records."""
     data_file = tmp_path / "EMPTY.txt"
@@ -41,6 +43,7 @@ def test_parse_empty_file(tmp_path: Path):
 
     records = list(parse_ascii_file(data_file))
     assert len(records) == 0
+
 
 def test_parse_header_only_file(tmp_path: Path):
     """Test that a file with only a header yields no records."""

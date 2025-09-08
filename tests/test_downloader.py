@@ -6,7 +6,6 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 from py_load_faers import downloader
 from py_load_faers.config import DownloaderSettings
 
@@ -22,11 +21,12 @@ SAMPLE_HTML = """
 </html>
 """
 
+
 def test_find_latest_quarter(mocker):
     """Test that the latest quarter is correctly parsed from the FDA website HTML."""
     # Mock the requests.get call
     mock_response = MagicMock()
-    mock_response.content = SAMPLE_HTML.encode('utf-8')
+    mock_response.content = SAMPLE_HTML.encode("utf-8")
     mock_response.raise_for_status.return_value = None
     mocker.patch("requests.Session.get", return_value=mock_response)
 
@@ -44,6 +44,7 @@ def test_find_latest_quarter_no_links(mocker):
 
 
 import io
+
 
 def test_download_quarter(mocker, tmp_path: Path):
     """Test the download, verification, and checksum calculation of a quarter file."""
@@ -63,12 +64,18 @@ def test_download_quarter(mocker, tmp_path: Path):
     settings = DownloaderSettings(download_dir=str(tmp_path))
     quarter_to_download = "2025q1"
 
-    result_path = downloader.download_quarter(quarter_to_download, settings)
+    result = downloader.download_quarter(quarter_to_download, settings)
+    assert result is not None
+    result_path, result_checksum = result
 
     expected_path = tmp_path / f"faers_ascii_{quarter_to_download}.zip"
     assert result_path == expected_path
     assert expected_path.exists()
     assert expected_path.read_bytes() == zip_content
+    # Check that the checksum is a 64-character hex string (SHA-256)
+    assert isinstance(result_checksum, str)
+    assert len(result_checksum) == 64
+    assert all(c in "0123456789abcdef" for c in result_checksum)
 
 
 def test_download_quarter_corrupted_file(mocker, tmp_path: Path):

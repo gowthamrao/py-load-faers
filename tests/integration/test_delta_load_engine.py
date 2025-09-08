@@ -2,7 +2,6 @@
 import pytest
 import zipfile
 from pathlib import Path
-import os
 
 from testcontainers.postgres import PostgresContainer
 from py_load_faers.config import AppSettings, DatabaseSettings, DownloaderSettings
@@ -12,11 +11,13 @@ from py_load_faers_postgres.loader import PostgresLoader
 # Mark all tests in this file as integration tests
 pytestmark = pytest.mark.integration
 
+
 @pytest.fixture(scope="module")
 def postgres_container():
     """Starts a PostgreSQL container for the test session."""
     with PostgresContainer("postgres:13") as pg:
         yield pg
+
 
 @pytest.fixture
 def db_settings(postgres_container):
@@ -29,6 +30,7 @@ def db_settings(postgres_container):
         dbname=postgres_container.POSTGRES_DB,
     )
 
+
 @pytest.fixture
 def app_settings(tmp_path, db_settings):
     """Provides application settings for the test."""
@@ -37,16 +39,18 @@ def app_settings(tmp_path, db_settings):
         db=db_settings,
     )
 
+
 def create_mock_zip(zip_path: Path, quarter: str, data: dict, deletions: list = []):
     """Creates a mock FAERS zip file with the given data."""
     year_short = quarter[2:4]
     q_num = quarter[-1]
-    with zipfile.ZipFile(zip_path, 'w') as zf:
+    with zipfile.ZipFile(zip_path, "w") as zf:
         for table, content in data.items():
             filename = f"{table.upper()}{year_short}Q{q_num}.txt"
             zf.writestr(filename, content)
         if deletions:
             zf.writestr(f"del_{quarter}.txt", "\n".join(deletions))
+
 
 @pytest.fixture
 def mock_faers_data(tmp_path):
@@ -77,22 +81,24 @@ def mock_faers_data(tmp_path):
     q2_data = {
         "demo": (
             "primaryid$caseid$fda_dt\n"
-            "2002$102$20240401\n" # Updated case with new, higher primaryid
-            "1004$104$20240401"   # New case
+            "2002$102$20240401\n"  # Updated case with new, higher primaryid
+            "1004$104$20240401"  # New case
         ),
         "drug": (
-            "primaryid$drug_seq$drugname\n"
-            "2002$1$Ibuprofen PM\n"
-            "1004$1$Advil"
+            "primaryid$drug_seq$drugname\n" "2002$1$Ibuprofen PM\n" "1004$1$Advil"
         ),
     }
     # Case 103 will be deleted via this deletion file
-    create_mock_zip(tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"])
+    create_mock_zip(
+        tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"]
+    )
 
     return tmp_path
 
+
 from typer.testing import CliRunner
 from py_load_faers.cli import app
+
 
 def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocker):
     """
@@ -103,7 +109,10 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
     4. Verify the database state is correct.
     """
     # Mock the downloader functions to use local mock files
-    mocker.patch("py_load_faers.engine.download_quarter", side_effect=lambda q, s: mock_faers_data / f"faers_ascii_{q}.zip")
+    mocker.patch(
+        "py_load_faers.engine.download_quarter",
+        side_effect=lambda q, s: (mock_faers_data / f"faers_ascii_{q}.zip", "dummy"),
+    )
     mocker.patch("py_load_faers.engine.find_latest_quarter", return_value="2024q2")
 
     runner = CliRunner()
@@ -134,9 +143,9 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
     verify_loader.connect()
     with verify_loader.conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM demo")
-        assert cur.fetchone()['count'] == 3
+        assert cur.fetchone()["count"] == 3
         cur.execute("SELECT caseid FROM demo ORDER BY caseid")
-        results = [r['caseid'] for r in cur.fetchall()]
+        results = [r["caseid"] for r in cur.fetchall()]
         assert results == ["101", "102", "103"]
     verify_loader.conn.close()
 
@@ -151,29 +160,29 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
     with pg_loader_delta.conn.cursor() as cur:
         # Check total counts
         cur.execute("SELECT COUNT(*) FROM demo")
-        assert cur.fetchone()['count'] == 3 # 101, 102 (new), 104
+        assert cur.fetchone()["count"] == 3  # 101, 102 (new), 104
 
         # Check case content
         cur.execute("SELECT primaryid, caseid FROM demo ORDER BY caseid")
         results = cur.fetchall()
-        assert [r['caseid'] for r in results] == ["101", "102", "104"]
+        assert [r["caseid"] for r in results] == ["101", "102", "104"]
 
         # Verify Case 102 was updated (has the new primaryid)
-        assert results[1]['primaryid'] == '2002'
+        assert results[1]["primaryid"] == "2002"
 
         # Verify Case 103 is deleted
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '103'")
-        assert cur.fetchone()['count'] == 0
+        assert cur.fetchone()["count"] == 0
 
         # Verify drug name for updated case 102
         cur.execute("SELECT drugname FROM drug WHERE primaryid = '2002'")
-        assert cur.fetchone()['drugname'] == "Ibuprofen PM"
+        assert cur.fetchone()["drugname"] == "Ibuprofen PM"
 
         # Verify load history
         cur.execute("SELECT quarter, status FROM _faers_load_history ORDER BY quarter")
         history = cur.fetchall()
         assert len(history) == 2
-        assert history[0]['quarter'] == '2024q1'
-        assert history[0]['status'] == 'SUCCESS'
-        assert history[1]['quarter'] == '2024q2'
-        assert history[1]['status'] == 'SUCCESS'
+        assert history[0]["quarter"] == "2024q1"
+        assert history[0]["status"] == "SUCCESS"
+        assert history[1]["quarter"] == "2024q2"
+        assert history[1]["status"] == "SUCCESS"

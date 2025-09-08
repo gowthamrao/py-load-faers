@@ -29,6 +29,7 @@ prod:
     dbname: faers_prod
 """
 
+
 @pytest.fixture
 def sample_config_file(tmp_path: Path) -> Path:
     """Create a sample config.yaml file in a temporary directory."""
