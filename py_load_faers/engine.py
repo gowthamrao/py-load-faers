@@ -6,6 +6,7 @@ import csv
 import io
 import logging
 import shutil
+import tempfile
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -163,6 +164,15 @@ class FaersLoaderEngine:
                 logger.warning("Detected ASCII format. Using in-memory processing path. This may consume significant memory for large files.")
                 all_records = self._parse_all_from_zip(zip_path)
                 caseids_for_deletion = get_caseids_to_delete(zip_path)
+
+                # Filter out records marked for deletion BEFORE deduplication
+                if caseids_for_deletion:
+                    logger.info(f"Removing {len(caseids_for_deletion)} case IDs from in-memory records before processing.")
+                    for table_name, records in all_records.items():
+                        all_records[table_name] = [
+                            record for record in records
+                            if record.get('caseid') not in caseids_for_deletion
+                        ]
 
                 demo_records = all_records.get("demo", [])
                 if not demo_records:

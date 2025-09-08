@@ -20,9 +20,9 @@ def db_settings(postgres_container: PostgresContainer) -> DatabaseSettings:
     return DatabaseSettings(
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
-        user=postgres_container.username,
-        password=postgres_container.password,
-        dbname=postgres_container.dbname,
+        user="test",
+        password="test",
+        dbname="test",
     )
 
 @pytest.fixture
@@ -54,11 +54,11 @@ def test_full_xml_load_with_deduplication_and_nullification(db_settings: Databas
     }
 
     config = AppSettings(
-        database=db_settings,
+        db=db_settings,
         downloader=DownloaderSettings(download_dir=str(realistic_xml_zip.parent)),
     )
 
-    db_loader = PostgresLoader(config.database)
+    db_loader = PostgresLoader(config.db)
     db_loader.connect()
     # Pass the schema definition as required by the updated signature
     db_loader.initialize_schema(schema_definition)

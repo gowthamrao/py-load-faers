@@ -148,3 +148,39 @@ def parse_ascii_file(file_path: Path, encoding: str = 'utf-8') -> Iterator[Dict[
     except Exception as e:
         logger.error(f"An error occurred while parsing {file_path}: {e}")
         raise
+
+
+def parse_deletion_file(file_path: Path) -> Set[int]:
+    """
+    Parses a FAERS deletion file, which contains a list of CASEIDs to be deleted.
+
+    The file is assumed to be a simple text file with one CASEID per line.
+    The function is designed to be robust, skipping a potential header row
+    and any lines that do not contain a valid integer.
+
+    :param file_path: The path to the deletion file.
+    :return: A set of integer CASEIDs.
+    """
+    logger.info(f"Parsing deletion file: {file_path}")
+    deleted_case_ids: Set[int] = set()
+    try:
+        with file_path.open('r', encoding='utf-8', errors='ignore') as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    # Attempt to convert the line to an integer.
+                    # This also handles the case of a header row, which will fail
+                    # the conversion and be skipped.
+                    deleted_case_ids.add(int(line))
+                except ValueError:
+                    if i == 0:
+                        logger.info(f"Skipping potential header row in {file_path}: '{line}'")
+                    else:
+                        logger.warning(f"Could not parse line as an integer in {file_path}: '{line}'")
+    except Exception as e:
+        logger.error(f"An error occurred while parsing deletion file {file_path}: {e}")
+        raise
+    logger.info(f"Found {len(deleted_case_ids)} case IDs to delete in {file_path}")
+    return deleted_case_ids
