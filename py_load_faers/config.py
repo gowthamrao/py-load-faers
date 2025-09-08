@@ -7,7 +7,7 @@ from a YAML file, environment variables, and CLI arguments.
 """
 import yaml
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -41,7 +41,10 @@ class ProcessingSettings(BaseModel):
     chunk_size: int = Field(
         500_000, description="Number of records to process in a single chunk."
     )
-    # Add other processing-related settings here in the future
+    staging_format: Literal["csv", "parquet"] = Field(
+        "parquet",
+        description="The intermediate file format for staging data before loading.",
+    )
 
 
 class AppSettings(BaseSettings):
