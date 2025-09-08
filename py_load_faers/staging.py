@@ -16,6 +16,7 @@ def stage_data_to_csv_files(
     record_iterator: Iterator[Dict[str, Any]],
     table_models: Dict[str, Type[BaseModel]],
     chunk_size: int = 1_000_000,
+    staging_dir: Optional[Path] = None,
 ) -> Dict[str, List[Path]]:
     """
     Parses a stream of FAERS reports and writes them to chunked, temporary CSV files.
@@ -23,11 +24,15 @@ def stage_data_to_csv_files(
     :param record_iterator: An iterator that yields parsed FAERS reports.
     :param table_models: A dictionary mapping table names to Pydantic models.
     :param chunk_size: The number of records to hold in memory per table before flushing to a file.
+    :param staging_dir: An optional path to a directory for staging files. If not provided, a new one is created.
     :return: A dictionary mapping table names to a list of paths to the created CSV files.
     """
     logger.info(f"Staging records to chunked CSV files with chunk size {chunk_size}.")
-    temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_"))
-    logger.info(f"Using temporary staging directory: {temp_dir}")
+    if staging_dir:
+        temp_dir = staging_dir
+    else:
+        temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_"))
+    logger.info(f"Using staging directory: {temp_dir}")
 
     staged_files: Dict[str, List[Path]] = {table_name: [] for table_name in table_models.keys()}
     record_buffers: Dict[str, List[Dict[str, Any]]] = {table_name: [] for table_name in table_models.keys()}
@@ -71,15 +76,6 @@ def _flush_buffer_to_disk(
     logger.debug(f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}")
 
     headers = [field.lower() for field in model.model_fields.keys()]
-
-    # Special handling for DEMO table to support deduplication
-    if table_name == "demo":
-        # To achieve the desired sort order (caseid ASC, fda_dt DESC, primaryid DESC),
-        # we perform a series of stable sorts in reverse order of precedence.
-        # Python's sort is stable.
-        buffer.sort(key=lambda r: r.get("primaryid", ""), reverse=True)
-        buffer.sort(key=lambda r: r.get("fda_dt", "0"), reverse=True)
-        buffer.sort(key=lambda r: r.get("caseid", ""))
 
     with file_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f, delimiter="$", quoting=csv.QUOTE_MINIMAL)

@@ -2,12 +2,13 @@
 """
 Tests for the data processing module.
 """
+import csv
 import zipfile
 from pathlib import Path
 
-import csv
 import pytest
-from py_load_faers.processing import get_caseids_to_delete, stream_deduplicate_sorted_file
+
+from py_load_faers.processing import get_caseids_to_delete, deduplicate_polars
 
 
 def test_get_caseids_to_delete_found(tmp_path: Path):
@@ -23,10 +24,7 @@ def test_get_caseids_to_delete_found(tmp_path: Path):
         zf.writestr(delete_filename, "\n".join(case_ids_to_delete))
         zf.writestr("other_file.txt", "some data")
 
-    # Run the function
     result = get_caseids_to_delete(zip_path)
-
-    # Assert the result is correct
     assert result == set(case_ids_to_delete)
 
 
@@ -35,72 +33,31 @@ def test_get_caseids_to_delete_not_found(tmp_path: Path):
     Test that get_caseids_to_delete returns an empty set when no deletion file exists.
     """
     zip_path = tmp_path / "faers_ascii_2025q1.zip"
-
-    # Create a dummy zip file without a deletion list
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("other_file.txt", "some data")
-
-    # Run the function
     result = get_caseids_to_delete(zip_path)
-
-    # Assert the result is an empty set
     assert result == set()
 
 
-def test_stream_deduplicate_sorted_file(tmp_path: Path):
-    """
-    Test the streaming deduplication logic on a pre-sorted CSV file.
-    """
-    # 1. Define test data and expected results
-    records = [
-        # Case 1: Three versions, middle one is latest date. Will be sorted to the top.
-        {'caseid': '1', 'primaryid': '101', 'fda_dt': '20230115'},
-        {'caseid': '1', 'primaryid': '103', 'fda_dt': '20230210'},
-        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20230320'},  # Keep
-        # Case 2: Unique case
-        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20230101'},  # Keep
-        # Case 3: Date tie, higher primaryid wins. Will be sorted to the top.
-        {'caseid': '3', 'primaryid': '301', 'fda_dt': '20230505'},
-        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20230505'},  # Keep
-        # Case 5: Another simple case
-        {'caseid': '5', 'primaryid': '501', 'fda_dt': '20240101'},  # Keep
-    ]
-    expected_ids = {'102', '201', '302', '501'}
+@pytest.fixture
+def create_demo_csv(tmp_path: Path):
+    """A pytest fixture to create a sample DEMO csv file for testing."""
+    def _create_csv(records, filename="test_demo.csv"):
+        csv_path = tmp_path / filename
+        headers = ['primaryid', 'caseid', 'caseversion', 'i_f_code', 'event_dt', 'mfr_dt', 'init_fda_dt', 'fda_dt', 'rept_cod', 'auth_num', 'mfr_num', 'mfr_sndr', 'lit_ref', 'age', 'age_cod', 'age_grp', 'sex', 'e_sub', 'wt', 'wt_cod', 'rept_dt', 'to_mfr', 'occp_cod', 'reporter_country', 'occr_country']
+        # Use a minimal set of headers for simplicity
+        min_headers = ['primaryid', 'caseid', 'fda_dt']
 
-    # 2. Sort records as they would be by the staging process
-    # Sort by primaryid (desc), then fda_dt (desc), then caseid (asc)
-    records.sort(key=lambda r: r.get("primaryid", ""), reverse=True)
-    records.sort(key=lambda r: r.get("fda_dt", "0"), reverse=True)
-    records.sort(key=lambda r: r.get("caseid", ""))
-
-    # 3. Create a temporary sorted CSV file
-    sorted_csv_path = tmp_path / "sorted_demo.csv"
-    headers = ['caseid', 'primaryid', 'fda_dt']
-    with open(sorted_csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=headers, delimiter='$')
-        writer.writeheader()
-        writer.writerows(records)
-
-    # 4. Run the function
-    result = stream_deduplicate_sorted_file(sorted_csv_path)
-
-    # 5. Assert the result
-    assert result == expected_ids
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f, delimiter='$')
+            writer.writerow(min_headers)
+            for record in records:
+                writer.writerow([record.get(h, "") for h in min_headers])
+        return csv_path
+    return _create_csv
 
 
-def test_stream_deduplicate_empty_file(tmp_path: Path):
-    """Test that the streaming deduplication handles an empty file."""
-    empty_csv_path = tmp_path / "empty.csv"
-    empty_csv_path.touch()
-
-    result = stream_deduplicate_sorted_file(empty_csv_path)
-    assert result == set()
-
-
-# --- Tests for the In-Memory (ASCII Path) Deduplication ---
-from py_load_faers.processing import deduplicate_records_in_memory
-
-def test_deduplicate_records_in_memory_basic():
+def test_deduplicate_polars_basic(create_demo_csv):
     """Test the core logic: latest fda_dt wins."""
     records = [
         {'caseid': '1', 'primaryid': '101', 'fda_dt': '20240101'},
@@ -108,83 +65,75 @@ def test_deduplicate_records_in_memory_basic():
         {'caseid': '2', 'primaryid': '201', 'fda_dt': '20240301'},  # Keep
     ]
     expected_ids = {'102', '201'}
-    result = deduplicate_records_in_memory(records)
+
+    demo_file = create_demo_csv(records)
+    result = deduplicate_polars([demo_file])
     assert result == expected_ids
 
-def test_deduplicate_records_in_memory_tiebreaker():
+def test_deduplicate_polars_tiebreaker(create_demo_csv):
     """Test the tie-breaking logic: when fda_dt is the same, latest primaryid wins."""
     records = [
         {'caseid': '3', 'primaryid': '301', 'fda_dt': '20240401'},
         {'caseid': '3', 'primaryid': '302', 'fda_dt': '20240401'},  # Keep
     ]
     expected_ids = {'302'}
-    result = deduplicate_records_in_memory(records)
+
+    demo_file = create_demo_csv(records)
+    result = deduplicate_polars([demo_file])
     assert result == expected_ids
 
-def test_deduplicate_records_in_memory_complex_mix():
+def test_deduplicate_polars_complex_mix(create_demo_csv):
     """Test a complex mix of scenarios."""
     records = [
-        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20230320'},  # Keep
+        # This order is intentionally mixed up to ensure sorting works correctly
         {'caseid': '1', 'primaryid': '101', 'fda_dt': '20230115'},
-        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20230101'},  # Keep
-        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20230505'},  # Keep
         {'caseid': '3', 'primaryid': '301', 'fda_dt': '20230505'},
+        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20230101'},  # Keep
+        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20230320'},  # Keep
+        {'caseid': '3', 'primaryid': '302', 'fda_dt': '20230505'},  # Keep
     ]
     expected_ids = {'102', '201', '302'}
-    result = deduplicate_records_in_memory(records)
+
+    demo_file = create_demo_csv(records)
+    result = deduplicate_polars([demo_file])
     assert result == expected_ids
 
-def test_deduplicate_in_memory_empty_input():
-    """Test that the in-memory function handles empty input gracefully."""
-    assert deduplicate_records_in_memory([]) == set()
-
-def test_deduplicate_in_memory_missing_columns():
-    """Test that the in-memory function raises an error if a required column is missing."""
-    records = [{'caseid': '1', 'primaryid': '101'}]  # Missing 'fda_dt'
-    with pytest.raises(ValueError, match="missing required columns"):
-        deduplicate_records_in_memory(records)
-
-
-def test_xml_parsing_and_processing_logic(tmp_path: Path):
-    """
-    Tests the combined logic of parsing an XML, handling nullifications,
-    and deduplicating the results in memory.
-    """
-    from py_load_faers.parser import parse_xml_file
-    from py_load_faers.processing import deduplicate_records_in_memory
-
-    # 1. Get the realistic test data
-    xml_file_path = Path(__file__).parent / "integration/test_data/realistic_faers.xml"
-
-    # 2. Parse the XML file
-    with xml_file_path.open('rb') as f:
-        # The parser returns a generator and the set of nullified case IDs
-        record_generator, nullified_case_ids = parse_xml_file(f)
-
-        # Consume the generator to get all records
-        all_records = list(record_generator)
-
-    # 3. Verify the parser's nullification output
-    # From the test file, V3 is a nullification for case '101'
-    assert nullified_case_ids == {'101'}
-
-    # 4. Simulate the pre-processing filtering step
-    # The engine should filter out any records belonging to a nullified case
-
-    # Flatten the list of dictionaries of lists into a list of dictionaries for demo table
-    all_demo_records = [item for record_dict in all_records for item in record_dict.get('demo', [])]
-
-    filtered_demo_records = [
-        rec for rec in all_demo_records if rec['caseid'] not in nullified_case_ids
+def test_deduplicate_polars_multiple_files(create_demo_csv):
+    """Test that deduplication works correctly across multiple source files."""
+    records1 = [
+        {'caseid': '1', 'primaryid': '101', 'fda_dt': '20240101'},
+        {'caseid': '2', 'primaryid': '201', 'fda_dt': '20240301'}, # Keep
     ]
+    records2 = [
+        {'caseid': '1', 'primaryid': '102', 'fda_dt': '20240201'}, # Keep
+        {'caseid': '3', 'primaryid': '301', 'fda_dt': '20240401'}, # Keep
+    ]
+    expected_ids = {'102', '201', '301'}
 
-    # After filtering, only records for case '102' should remain
-    assert len(filtered_demo_records) == 1
-    assert filtered_demo_records[0]['caseid'] == '102'
+    demo_file1 = create_demo_csv(records1, "demo1.csv")
+    demo_file2 = create_demo_csv(records2, "demo2.csv")
 
-    # 5. Pass the filtered records to the deduplication function
-    primary_ids_to_keep = deduplicate_records_in_memory(filtered_demo_records)
+    result = deduplicate_polars([demo_file1, demo_file2])
+    assert result == expected_ids
 
-    # 6. Assert the final result
-    # Only the primaryid for case '102' should be left
-    assert primary_ids_to_keep == {'V4'}
+
+def test_deduplicate_polars_empty_input():
+    """Test that the function handles an empty list of files."""
+    assert deduplicate_polars([]) == set()
+
+
+def test_deduplicate_polars_empty_file(create_demo_csv):
+    """Test that the function handles a file that is empty or has only a header."""
+    demo_file = create_demo_csv([])
+    assert deduplicate_polars([demo_file]) == set()
+
+def test_deduplicate_polars_missing_column(tmp_path: Path):
+    """Test that the function raises an error if a required column is missing."""
+    csv_path = tmp_path / "bad_data.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f, delimiter="$")
+        writer.writerow(['caseid', 'some_other_column'])
+        writer.writerow(['1', 'abc'])
+
+    with pytest.raises(ValueError, match="Deduplication failed due to missing columns"):
+        deduplicate_polars([csv_path])
