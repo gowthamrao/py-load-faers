@@ -45,6 +45,68 @@ def test_parse_empty_file(tmp_path: Path):
     assert len(records) == 0
 
 
+import pytest
+from py_load_faers.parser import parse_ascii_quarter
+
+def test_parse_ascii_quarter():
+    """
+    Tests the main ASCII parsing logic which reads a directory of ASCII files,
+    handles deletions, and structures the data correctly.
+    """
+    # Point to the directory containing the unzipped ASCII files
+    test_data_dir = Path("tests/integration/test_data/ascii_quarter")
+
+    # This is the function we will build in the next step
+    record_generator, nullified_case_ids = parse_ascii_quarter(test_data_dir)
+
+    # Convert generator to list to inspect the results
+    records = list(record_generator)
+
+    # 1. Check that the deleted case was identified
+    assert nullified_case_ids == {"102"}
+
+    # 2. Check that the correct number of records are returned (3 total cases - 1 deleted)
+    assert len(records) == 2
+
+    # 3. Deeply inspect the structure of a returned record to ensure it matches the XML parser's output
+    case_101 = next((r for r in records if r["demo"][0]["caseid"] == "101"), None)
+    assert case_101 is not None
+
+    # Check the demo table data for case 101
+    assert case_101["demo"] == [
+        {
+            "primaryid": "10101",
+            "caseid": "101",
+            "fda_dt": "20240101",
+            "sex": "F",
+            "age": "55",
+            "reporter_country": "US",
+        }
+    ]
+
+    # Check the drug table data for case 101
+    assert len(case_101["drug"]) == 2
+    assert case_101["drug"][0] == {
+        "primaryid": "10101",
+        "caseid": "101",
+        "drug_seq": "1",
+        "drugname": "ASPIRIN",
+        "role_cod": "PS",
+    }
+    assert case_101["drug"][1]["drugname"] == "LISINOPRIL"
+
+    # Check the reaction table data for case 101
+    assert case_101["reac"] == [{"primaryid": "10101", "caseid": "101", "pt": "RASH"}]
+
+    # Check case 103 as well
+    case_103 = next((r for r in records if r["demo"][0]["caseid"] == "103"), None)
+    assert case_103 is not None
+    assert case_103["drug"][0]["drugname"] == "IBUPROFEN"
+    assert len(case_103["reac"]) == 2
+    assert {"primaryid": "10301", "caseid": "103", "pt": "NAUSEA"} in case_103["reac"]
+    assert {"primaryid": "10301", "caseid": "103", "pt": "DIZZINESS"} in case_103["reac"]
+
+
 def test_parse_header_only_file(tmp_path: Path):
     """Test that a file with only a header yields no records."""
     data_file = tmp_path / "HEADER.txt"

@@ -7,7 +7,126 @@ import logging
 from pathlib import Path
 from typing import IO, Iterator, Dict, Any, Tuple, Set
 
+import polars as pl
+
 logger = logging.getLogger(__name__)
+
+
+def parse_ascii_quarter(
+    quarter_dir: Path,
+) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
+    """
+    Parses a directory of unzipped FAERS ASCII files for a single quarter using a
+    more memory-efficient, separated-table approach.
+    """
+    nullified_case_ids = _parse_deletion_file(quarter_dir)
+    faers_data = _load_ascii_tables_to_polars(quarter_dir)
+
+    if "demo" not in faers_data or faers_data["demo"].is_empty():
+        logger.warning(f"No DEMO data in {quarter_dir}.")
+        return iter([]), nullified_case_ids
+
+    # Filter out nullified cases from the main demo table first
+    df_demo = faers_data["demo"].filter(
+        ~pl.col("caseid").is_in(list(nullified_case_ids))
+    )
+
+    # Get the set of primaryids that we need to keep for all other tables
+    primaryids_to_keep = df_demo["primaryid"].to_list()
+
+    # Filter all other tables based on the primaryids to keep
+    for name, df in faers_data.items():
+        if name != "demo" and df is not None and not df.is_empty():
+            faers_data[name] = df.filter(pl.col("primaryid").is_in(primaryids_to_keep))
+
+    def record_generator():
+        # Iterate over each valid demo record (one per case version)
+        for demo_row in df_demo.to_dicts():
+            primary_id = demo_row["primaryid"]
+            case_id = demo_row["caseid"]
+
+            report = {"demo": [demo_row]}
+
+            # For each sub-table, filter its dataframe for the current primaryid
+            for table_name, df_table in faers_data.items():
+                if table_name == "demo":
+                    continue
+
+                table_records = []
+                if df_table is not None and not df_table.is_empty():
+                    # Filter the already-reduced table for the specific primary_id
+                    records = df_table.filter(
+                        pl.col("primaryid") == primary_id
+                    ).to_dicts()
+
+                    # Add caseid for consistency
+                    for r in records:
+                        r["caseid"] = case_id
+                    table_records.extend(records)
+
+                report[table_name] = table_records
+
+            yield report
+
+    return record_generator(), nullified_case_ids
+
+
+def _parse_deletion_file(quarter_dir: Path) -> Set[str]:
+    """Finds and parses a FAERS deletion file, returning a set of CASEIDs."""
+    deletion_patterns = ["DELE*.TXT", "DELETED_CASES_*.TXT"]
+    nullified_case_ids: Set[str] = set()
+    for pattern in deletion_patterns:
+        try:
+            deletion_file = next(quarter_dir.glob(pattern))
+            logger.info(f"Found deletion file: {deletion_file}")
+            with deletion_file.open("r", encoding="utf-8", errors="ignore") as f:
+                reader = csv.reader(f, delimiter="$")
+                try:
+                    header = [h.lower() for h in next(reader)]
+                    caseid_idx = header.index("caseid")
+                    for row in reader:
+                        if row:
+                            nullified_case_ids.add(row[caseid_idx])
+                except (StopIteration, ValueError):
+                    logger.warning(
+                        f"Could not read header or find 'caseid' column in {deletion_file}"
+                    )
+            logger.info(f"Found {len(nullified_case_ids)} case IDs for deletion.")
+            return nullified_case_ids
+        except StopIteration:
+            continue
+    logger.info("No deletion file found for this quarter.")
+    return nullified_case_ids
+
+
+def _load_ascii_tables_to_polars(
+    quarter_dir: Path,
+) -> Dict[str, pl.DataFrame]:
+    """Loads all recognized FAERS table files from a directory into Polars DataFrames."""
+    table_names = ["demo", "drug", "reac", "outc", "rpsr", "ther", "indi"]
+    dataframes: Dict[str, pl.DataFrame] = {}
+
+    for table in table_names:
+        try:
+            # Find file ignoring case, e.g., DEMO24Q1.TXT or demo24q1.txt
+            file_path = next(quarter_dir.glob(f"{table.upper()}*.TXT"))
+            df = pl.read_csv(
+                file_path,
+                separator="$",
+                has_header=True,
+                ignore_errors=True,
+            )
+            # Normalize column names to lowercase and cast all to string
+            df.columns = [c.lower() for c in df.columns]
+            df = df.with_columns(pl.all().cast(pl.Utf8))
+            dataframes[table] = df
+            logger.debug(f"Loaded {file_path} into DataFrame with {len(df)} rows.")
+        except StopIteration:
+            logger.warning(f"No data file found for table '{table}' in {quarter_dir}")
+        except Exception as e:
+            logger.error(f"Failed to load table {table} from {quarter_dir}: {e}")
+
+    return dataframes
 
 
 def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:

@@ -1,0 +1,4 @@
+primaryid$caseid$fda_dt$sex$age$reporter_country
+10101$101$20240101$F$55$US
+10201$102$20240102$M$65$CA
+10301$103$20240103$F$75$UK
