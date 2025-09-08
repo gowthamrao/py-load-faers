@@ -3,12 +3,10 @@
 This module contains the main ETL engine for the FAERS data loader.
 """
 import csv
-import io
 import logging
 import shutil
 import tempfile
 import uuid
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Generator, Set
@@ -18,7 +16,7 @@ from .database import AbstractDatabaseLoader
 from .downloader import download_quarter, find_latest_quarter
 from .models import FAERS_TABLE_MODELS
 from .parser import parse_xml_file
-from .processing import get_caseids_to_delete, deduplicate_polars
+from .processing import deduplicate_polars
 from .staging import stage_data_to_csv_files
 
 logger = logging.getLogger(__name__)
@@ -276,63 +274,3 @@ class FaersLoaderEngine:
                                 writer.writerow(row)
         return final_files
 
-    def _stage_ascii_records(
-        self, all_records: Dict[str, List[Dict[str, Any]]], staging_dir: Path
-    ) -> Dict[str, List[Path]]:
-        """Writes in-memory records from ASCII files to staged CSV chunks."""
-        logger.info(f"Staging ASCII records to CSV files in {staging_dir}")
-        staged_files: Dict[str, List[Path]] = {
-            name: [] for name in FAERS_TABLE_MODELS.keys()
-        }
-
-        for table_name, records in all_records.items():
-            if records:
-                model = FAERS_TABLE_MODELS[table_name]
-                headers = [field.lower() for field in model.model_fields.keys()]
-                # For ASCII, we assume it fits in a single chunk
-                file_path = staging_dir / f"{table_name}_001.csv"
-
-                with file_path.open("w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f, delimiter="$")
-                    writer.writerow(headers)
-                    for record in records:
-                        writer.writerow([record.get(h) for h in headers])
-                staged_files[table_name].append(file_path)
-        return staged_files
-
-    def _parse_all_from_zip(self, zip_path: Path) -> Dict[str, List[Dict[str, Any]]]:
-        """Parses all FAERS ASCII tables from a zip file directly into memory."""
-        all_records: Dict[str, List[Dict[str, Any]]] = {
-            name: [] for name in FAERS_TABLE_MODELS.keys()
-        }
-        year_short = zip_path.stem.split("_")[-1][2:4]
-        q_num = zip_path.stem.split("_")[-1][-1]
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for table_name in all_records.keys():
-                file_pattern = f"{table_name.upper()}{year_short}Q{q_num}.txt"
-                try:
-                    data_filename = next(
-                        f
-                        for f in zf.namelist()
-                        if f.upper().endswith(file_pattern.upper())
-                    )
-                    with zf.open(data_filename) as f:
-                        text_stream = io.TextIOWrapper(
-                            f, encoding="utf-8", errors="ignore"
-                        )
-                        reader = csv.reader(text_stream, delimiter="$")
-                        try:
-                            headers = [h.lower() for h in next(reader)]
-                            for row in reader:
-                                if len(row) == len(headers):
-                                    all_records[table_name].append(
-                                        dict(zip(headers, row))
-                                    )
-                        except StopIteration:
-                            logger.warning(f"File {data_filename} is empty.")
-                except StopIteration:
-                    logger.warning(
-                        f"Could not find data file for table '{table_name}' in {zip_path}"
-                    )
-        return all_records

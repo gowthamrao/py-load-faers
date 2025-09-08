@@ -103,3 +103,27 @@ def _flush_buffer_to_disk(
 
     staged_files[table_name].append(file_path)
     file_counters[table_name] += 1
+
+
+import zipfile
+
+def extract_zip_archive(zip_path: Path, extract_to_dir: Path) -> List[Path]:
+    """
+    Extracts all contents of a zip archive to a specified directory.
+
+    :param zip_path: The path to the zip file.
+    :param extract_to_dir: The directory where contents will be extracted.
+    :return: A list of paths to the extracted files.
+    """
+    logger.info(f"Extracting archive {zip_path} to {extract_to_dir}...")
+    extract_to_dir.mkdir(parents=True, exist_ok=True)
+
+    extracted_files = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(extract_to_dir)
+        for member in zf.infolist():
+            if not member.is_dir():
+                extracted_files.append(extract_to_dir / member.filename)
+
+    logger.info(f"Successfully extracted {len(extracted_files)} files.")
+    return extracted_files
