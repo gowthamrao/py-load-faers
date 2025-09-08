@@ -6,7 +6,7 @@ import csv
 import logging
 import tempfile
 from pathlib import Path
-from typing import Iterator, Dict, Any, Type, List, Optional, Tuple
+from typing import Iterator, Dict, Any, Type, List, Optional
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -34,9 +34,15 @@ def stage_data_to_csv_files(
         temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_"))
     logger.info(f"Using staging directory: {temp_dir}")
 
-    staged_files: Dict[str, List[Path]] = {table_name: [] for table_name in table_models.keys()}
-    record_buffers: Dict[str, List[Dict[str, Any]]] = {table_name: [] for table_name in table_models.keys()}
-    file_counters: Dict[str, int] = {table_name: 0 for table_name in table_models.keys()}
+    staged_files: Dict[str, List[Path]] = {
+        table_name: [] for table_name in table_models.keys()
+    }
+    record_buffers: Dict[str, List[Dict[str, Any]]] = {
+        table_name: [] for table_name in table_models.keys()
+    }
+    file_counters: Dict[str, int] = {
+        table_name: 0 for table_name in table_models.keys()
+    }
 
     for report in record_iterator:
         for table_name, records in report.items():
@@ -47,7 +53,12 @@ def stage_data_to_csv_files(
         for table_name, buffer in record_buffers.items():
             if len(buffer) >= chunk_size:
                 _flush_buffer_to_disk(
-                    temp_dir, table_name, buffer, file_counters, staged_files, table_models[table_name]
+                    temp_dir,
+                    table_name,
+                    buffer,
+                    file_counters,
+                    staged_files,
+                    table_models[table_name],
                 )
                 buffer.clear()
 
@@ -55,7 +66,12 @@ def stage_data_to_csv_files(
     for table_name, buffer in record_buffers.items():
         if buffer:
             _flush_buffer_to_disk(
-                temp_dir, table_name, buffer, file_counters, staged_files, table_models[table_name]
+                temp_dir,
+                table_name,
+                buffer,
+                file_counters,
+                staged_files,
+                table_models[table_name],
             )
 
     logger.info("Staging to CSV files complete.")
@@ -73,7 +89,9 @@ def _flush_buffer_to_disk(
     """Helper to write a buffer of records to a new CSV file."""
     chunk_num = file_counters[table_name]
     file_path = temp_dir / f"{table_name}_chunk_{chunk_num}.csv"
-    logger.debug(f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}")
+    logger.debug(
+        f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}"
+    )
 
     headers = [field.lower() for field in model.model_fields.keys()]
 

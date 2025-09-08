@@ -11,7 +11,6 @@ from py_load_faers.models import FAERS_TABLE_MODELS
 
 import zipfile
 from pathlib import Path
-import io
 from typer.testing import CliRunner
 
 from py_load_faers.cli import app
@@ -30,11 +29,13 @@ SAMPLE_DRUG_DATA = """primaryid$caseid$drug_seq$drugname
 1002$2$1$Metformin
 """
 
+
 @pytest.fixture(scope="module")
 def postgres_container():
     """Fixture to start and stop a PostgreSQL container for the test module."""
     with PostgresContainer("postgres:13") as container:
         yield container
+
 
 @pytest.fixture
 def sample_faers_zip(tmp_path: Path) -> Path:
@@ -67,35 +68,54 @@ def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer
     loader.initialize_schema(FAERS_TABLE_MODELS)
 
     # Verify that the tables were created
-    expected_tables = {"demo", "drug", "reac", "outc", "rpsr", "ther", "indi", "_faers_load_history"}
+    expected_tables = {
+        "demo",
+        "drug",
+        "reac",
+        "outc",
+        "rpsr",
+        "ther",
+        "indi",
+        "_faers_load_history",
+    }
 
     with loader.conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT table_name
             FROM information_schema.tables
             WHERE table_schema = 'public'
-        """)
+        """
+        )
         tables_in_db = {row["table_name"] for row in cur.fetchall()}
 
     assert expected_tables.issubset(tables_in_db)
 
     # Verify a column in a table to be extra sure
     with loader.conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT column_name
             FROM information_schema.columns
             WHERE table_name = 'demo' AND column_name = 'caseid'
-        """)
+        """
+        )
         assert cur.fetchone() is not None
 
     loader.conn.close()
 
-def test_run_command_end_to_end(postgres_container: PostgresContainer, sample_faers_zip: Path, mocker):
+
+def test_run_command_end_to_end(
+    postgres_container: PostgresContainer, sample_faers_zip: Path, mocker
+):
     """
     Test the full end-to-end 'run' command, from download to database load.
     """
     # Mock the downloader where it's used: in the engine module.
-    mocker.patch("py_load_faers.engine.download_quarter", return_value=sample_faers_zip)
+    mocker.patch(
+        "py_load_faers.engine.download_quarter",
+        return_value=(sample_faers_zip, "dummy"),
+    )
 
     # Get DB settings from the container
     db_settings = DatabaseSettings(
@@ -154,21 +174,27 @@ def realistic_faers_zip(tmp_path: Path) -> Path:
     return zip_path
 
 
-def test_data_quality_check_passes_and_fails(postgres_container: PostgresContainer, realistic_faers_zip: Path, mocker):
+def test_data_quality_check_passes_and_fails(
+    postgres_container: PostgresContainer, realistic_faers_zip: Path, mocker
+):
     """
     Tests the data quality check command.
     1. Loads good data and asserts the check passes.
     2. Injects a duplicate and asserts the check fails.
     """
-    from py_load_faers.exceptions import DataQualityError
 
-    mocker.patch("py_load_faers.engine.download_quarter", return_value=realistic_faers_zip)
+    mocker.patch(
+        "py_load_faers.engine.download_quarter",
+        return_value=(realistic_faers_zip, "dummy"),
+    )
     mocker.patch("py_load_faers.engine.find_latest_quarter", return_value="2025q2")
 
     db_settings = DatabaseSettings(
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
-        user="test", password="test", dbname="test",
+        user="test",
+        password="test",
+        dbname="test",
     )
     env = {
         "PY_LOAD_FAERS_DB__HOST": db_settings.host,
@@ -202,7 +228,11 @@ def test_data_quality_check_passes_and_fails(postgres_container: PostgresContain
         # Insert it with a new primaryid but the same caseid
         cur.execute(
             "INSERT INTO demo (primaryid, caseid, fda_dt) VALUES (%s, %s, %s);",
-            ('DUPLICATE-PRIMARYID', record_to_duplicate['caseid'], record_to_duplicate['fda_dt'])
+            (
+                "DUPLICATE-PRIMARYID",
+                record_to_duplicate["caseid"],
+                record_to_duplicate["fda_dt"],
+            ),
         )
         loader.commit()
     loader.conn.close()

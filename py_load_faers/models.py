@@ -12,8 +12,14 @@ from pydantic import BaseModel, Field
 
 class Demo(BaseModel):
     """Demographic and administrative information."""
-    primaryid: str = Field(..., description="The unique identifier for a specific version of a case report.")
-    caseid: str = Field(..., description="A unique identifier for an adverse event case.")
+
+    primaryid: str = Field(
+        ...,
+        description="The unique identifier for a specific version of a case report.",
+    )
+    caseid: str = Field(
+        ..., description="A unique identifier for an adverse event case."
+    )
     caseversion: Optional[str] = None
     i_f_code: Optional[str] = None
     event_dt: Optional[str] = None
@@ -41,6 +47,7 @@ class Demo(BaseModel):
 
 class Drug(BaseModel):
     """Drug information from the case reports."""
+
     primaryid: str
     caseid: str
     drug_seq: str
@@ -65,6 +72,7 @@ class Drug(BaseModel):
 
 class Reac(BaseModel):
     """Reaction information from the reports."""
+
     primaryid: str
     caseid: str
     pt: str
@@ -73,6 +81,7 @@ class Reac(BaseModel):
 
 class Outc(BaseModel):
     """Patient outcome information from the reports."""
+
     primaryid: str
     caseid: str
     outc_cod: str
@@ -80,6 +89,7 @@ class Outc(BaseModel):
 
 class Rpsr(BaseModel):
     """Information on the source of the reports."""
+
     primaryid: str
     caseid: str
     rpsr_cod: str
@@ -87,6 +97,7 @@ class Rpsr(BaseModel):
 
 class Ther(BaseModel):
     """Drug therapy information."""
+
     primaryid: str
     caseid: str
     dsg_drug_seq: str
@@ -98,6 +109,7 @@ class Ther(BaseModel):
 
 class Indi(BaseModel):
     """Indication for use for each drug."""
+
     primaryid: str
     caseid: str
     indi_drug_seq: str
