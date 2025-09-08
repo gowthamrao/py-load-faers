@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Set, List, Dict, Any, Iterator, Iterable
 
 import pandas as pd
+import polars as pl
 
 logger = logging.getLogger(__name__)
 
@@ -68,130 +69,77 @@ def get_caseids_to_delete(zip_path: Path) -> Set[str]:
     return case_ids_to_delete
 
 
-def merge_sorted_files(file_paths: List[Path], output_path: Path) -> None:
+
+
+def deduplicate_polars(demo_files: List[Path]) -> Set[str]:
     """
-    Merges multiple sorted files into a single sorted file using a k-way merge.
-    The sort order is specific to the FAERS deduplication logic:
-    caseid (asc), fda_dt (desc), primaryid (desc).
-    """
-    logger.info(f"Merging {len(file_paths)} sorted files into {output_path}.")
+    Applies the FDA-recommended deduplication logic using Polars for scalability.
+    This function can process multiple CSV files in a memory-efficient way.
 
-    class SortableRow:
-        def __init__(self, row: List[str], headers: List[str]):
-            self.row = row
-            self._headers = headers
-            # Cache the values used for comparison
-            self.caseid = self._get('caseid')
-            self.fda_dt = self._get('fda_dt')
-            self.primaryid = self._get('primaryid')
-
-        def _get(self, key: str) -> str:
-            try:
-                return self.row[self._headers.index(key)]
-            except (ValueError, IndexError):
-                return ""
-
-        def __lt__(self, other: "SortableRow") -> bool:
-            if self.caseid != other.caseid:
-                return self.caseid < other.caseid
-            if self.fda_dt != other.fda_dt:
-                return self.fda_dt > other.fda_dt  # Note: Descending order
-            if self.primaryid != other.primaryid:
-                return self.primaryid > other.primaryid  # Note: Descending order
-            return False
-
-    _readers = [open(f, 'r', newline='', encoding='utf-8') for f in file_paths]
-    try:
-        iterators = [csv.reader(r, delimiter='$') for r in _readers]
-        headers_list = [next(it) for it in iterators]
-
-        if not headers_list:
-            logger.warning("No files to merge.")
-            return
-
-        # Wrap each row in the sortable class
-        wrapped_iterators = [
-            (SortableRow(row, headers) for row in it)
-            for it, headers in zip(iterators, headers_list)
-        ]
-
-        merged_iterator = heapq.merge(*wrapped_iterators)
-
-        with output_path.open('w', newline='', encoding='utf-8') as f_out:
-            writer = csv.writer(f_out, delimiter='$')
-            writer.writerow(headers_list[0])  # Write header
-            for wrapped_row in merged_iterator:
-                writer.writerow(wrapped_row.row)
-
-    finally:
-        for r in _readers:
-            r.close()
-
-def stream_deduplicate_sorted_file(sorted_demo_path: Path) -> Set[str]:
-    """
-    Reads a sorted DEMO file and yields the primaryid of records to keep.
-    The file must be sorted by caseid (asc), fda_dt (desc), and primaryid (desc).
-    """
-    logger.info(f"Performing streaming deduplication on {sorted_demo_path}.")
-    primaryids_to_keep = set()
-    current_caseid = None
-
-    with sorted_demo_path.open('r', newline='', encoding='utf-8') as f:
-        reader = csv.reader(f, delimiter='$')
-        try:
-            headers = next(reader)
-            caseid_idx = headers.index('caseid')
-            primaryid_idx = headers.index('primaryid')
-        except (StopIteration, ValueError):
-            logger.warning(f"File {sorted_demo_path} is empty or has no header.")
-            return set()
-
-        for row in reader:
-            caseid = row[caseid_idx]
-            if caseid != current_caseid:
-                # This is the first time we see this caseid.
-                # Because the file is sorted, this row is the best one for this case.
-                primaryids_to_keep.add(row[primaryid_idx])
-                current_caseid = caseid
-
-    logger.info(f"Streaming deduplication complete. {len(primaryids_to_keep)} unique cases to keep.")
-    return primaryids_to_keep
-
-
-def deduplicate_records_in_memory(demo_records: List[Dict[str, Any]]) -> Set[str]:
-    """
-    Applies the FDA-recommended deduplication logic to an in-memory list of records.
-    This function uses pandas and is intended for smaller datasets (e.g., ASCII files).
-
-    :param demo_records: A list of dictionaries, where each dictionary represents a record.
+    :param demo_files: A list of Path objects pointing to the DEMO CSV files.
     :return: A set of PRIMARYID strings that should be kept.
     """
-    if not demo_records:
+    if not demo_files:
         return set()
 
-    logger.info(f"Starting in-memory deduplication for {len(demo_records)} records.")
-    df = pd.DataFrame(demo_records)
+    valid_files = [f for f in demo_files if f.exists() and f.stat().st_size > 0]
+    if not valid_files:
+        logger.warning("No valid, non-empty DEMO files found for deduplication.")
+        return set()
 
-    required_cols = {'caseid', 'primaryid', 'fda_dt'}
-    if not required_cols.issubset(df.columns):
-        missing_cols = required_cols - set(df.columns)
-        raise ValueError(f"Input data is missing required columns for deduplication: {missing_cols}")
+    logger.info(f"Starting Polars-based deduplication for {len(valid_files)} file(s).")
 
-    # Ensure columns are treated as strings, except for the date
-    df['caseid'] = df['caseid'].astype(str)
-    df['primaryid'] = df['primaryid'].astype(str)
-    df['fda_dt'] = pd.to_datetime(df['fda_dt'], format='%Y%m%d', errors='coerce')
-    df.dropna(subset=['caseid', 'primaryid', 'fda_dt'], inplace=True)
+    try:
+        # Enforce string types for ID fields to prevent incorrect type inference.
+        lazy_query = pl.scan_csv(
+            valid_files,
+            separator='$',
+            has_header=True,
+            ignore_errors=True,
+            schema_overrides={
+                "primaryid": pl.Utf8,
+                "caseid": pl.Utf8,
+                "fda_dt": pl.Utf8,
+            }
+        )
 
-    # Sort by the deduplication criteria: caseid asc, fda_dt desc, primaryid desc
-    df.sort_values(
-        by=['caseid', 'fda_dt', 'primaryid'],
-        ascending=[True, False, False],
-        inplace=True
-    )
+        required_cols = {'primaryid', 'caseid', 'fda_dt'}
+        if not required_cols.issubset(lazy_query.columns):
+            missing = required_cols - set(lazy_query.columns)
+            raise ValueError(f"Deduplication failed due to missing columns: {missing}")
 
-    df_deduplicated = df.drop_duplicates(subset='caseid', keep='first')
-    primary_ids_to_keep = set(df_deduplicated['primaryid'])
+        deduplicated_query = (
+            lazy_query
+            .select(['primaryid', 'caseid', 'fda_dt'])
+            .with_columns(
+                pl.col("fda_dt").str.to_date("%Y%m%d", strict=False).alias("fda_dt_parsed")
+            )
+            .drop_nulls(subset=['primaryid', 'caseid', 'fda_dt_parsed'])
+            .sort(by=['caseid', 'fda_dt_parsed', 'primaryid'], descending=[False, True, True])
+            .unique(subset='caseid', keep='first', maintain_order=True)
+            .select('primaryid')
+        )
 
-    logger.info(f"In-memory deduplication complete. {len(primary_ids_to_keep)} unique cases to keep.")
-    return primary_ids_to_keep
+        try:
+            result_df = deduplicated_query.collect(streaming=True)
+        except BaseException as e:
+            # Catching BaseException is broad, but Polars can panic on
+            # header-only files in a way that isn't caught by a standard Exception.
+            logger.warning(f"Could not collect deduplication results, likely due to empty/invalid file. Error: {e}")
+            return set()
+
+        if result_df.is_empty():
+            logger.info("Deduplication resulted in zero records to keep.")
+            return set()
+
+        primary_ids_to_keep = set(result_df['primaryid'].to_list())
+
+        logger.info(f"Polars deduplication complete. {len(primary_ids_to_keep)} unique cases to keep.")
+        return primary_ids_to_keep
+
+    except (pl.exceptions.ColumnNotFoundError, pl.exceptions.SchemaError) as e:
+        logger.error(f"Deduplication failed due to missing or mismatched columns: {e}")
+        raise ValueError("Deduplication failed due to missing or mismatched columns.") from e
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during Polars deduplication: {e}")
+        raise

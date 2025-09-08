@@ -6,6 +6,7 @@ import csv
 import io
 import logging
 import shutil
+import tempfile
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ from .database import AbstractDatabaseLoader
 from .downloader import download_quarter, find_latest_quarter
 from .models import FAERS_TABLE_MODELS
 from .parser import parse_xml_file
-from .processing import get_caseids_to_delete, merge_sorted_files, stream_deduplicate_sorted_file, deduplicate_records_in_memory
+from .processing import get_caseids_to_delete, deduplicate_polars
 from .staging import stage_data_to_csv_files
 
 logger = logging.getLogger(__name__)
@@ -101,8 +102,8 @@ class FaersLoaderEngine:
 
     def _process_quarter(self, quarter: str, load_type: str):
         """
-        Downloads, processes, and loads data for a single FAERS quarter.
-        Uses a streaming approach for XML and an in-memory approach for ASCII.
+        Downloads, processes, and loads data for a single FAERS quarter using a unified,
+        scalable pipeline.
         """
         logger.info(f"Processing quarter: {quarter}")
         load_id = uuid.uuid4()
@@ -115,86 +116,53 @@ class FaersLoaderEngine:
         self.db_loader.update_load_history(metadata)
 
         zip_path = None
-        staging_dir = None
+        staging_dir = Path(tempfile.mkdtemp(prefix=f"faers_{quarter}_"))
+        logger.info(f"Created staging directory: {staging_dir}")
+
         try:
             zip_path = download_quarter(quarter, self.config.downloader)
             if not zip_path:
                 raise RuntimeError(f"Download failed for quarter {quarter}.")
 
+            # --- Unified Parsing and Staging ---
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 is_xml = any(f.lower().endswith('.xml') for f in zf.namelist())
-
-            if is_xml:
-                # --- XML Streaming Path ---
-                logger.info("Detected XML format. Using memory-efficient streaming path.")
-                with zipfile.ZipFile(zip_path, 'r') as zf:
+                if is_xml:
+                    logger.info("Detected XML format.")
                     xml_filename = next(f for f in zf.namelist() if f.lower().endswith('.xml'))
                     xml_stream = zf.open(xml_filename)
                     record_iterator, nullified_ids = parse_xml_file(xml_stream)
                     caseids_for_deletion = get_caseids_to_delete(zip_path)
                     caseids_for_deletion.update(nullified_ids)
+                    staged_chunk_files = stage_data_to_csv_files(
+                        record_iterator, FAERS_TABLE_MODELS, self.config.processing.chunk_size, staging_dir
+                    )
+                else:
+                    logger.info("Detected ASCII format.")
+                    all_records = self._parse_all_from_zip(zip_path)
+                    caseids_for_deletion = get_caseids_to_delete(zip_path)
+                    staged_chunk_files = self._stage_ascii_records(all_records, staging_dir)
 
-                staged_chunk_files = stage_data_to_csv_files(record_iterator, FAERS_TABLE_MODELS, self.config.processing.chunk_size)
-                staging_dir = staged_chunk_files["demo"][0].parent if staged_chunk_files.get("demo") else None
+            # --- Unified Deduplication ---
+            demo_chunks = staged_chunk_files.get("demo", [])
+            if not demo_chunks:
+                logger.warning(f"No DEMO records found for quarter {quarter}. Skipping.")
+                metadata["status"] = "SUCCESS"
+                return
 
-                demo_chunks = staged_chunk_files.get("demo", [])
-                if not demo_chunks:
-                    logger.warning(f"No DEMO records found for quarter {quarter}. Skipping.")
-                    metadata["status"] = "SUCCESS"
-                    return
+            primaryids_to_keep = deduplicate_polars(demo_chunks)
 
-                merged_demo_path = staging_dir / "demo_sorted_merged.csv"
-                # The new merge_sorted_files handles the complex sort correctly.
-                merge_sorted_files(demo_chunks, merged_demo_path)
-                primaryids_to_keep = stream_deduplicate_sorted_file(merged_demo_path)
+            # --- Unified Filtering and Loading ---
+            final_staged_files = self._filter_staged_files(staged_chunk_files, primaryids_to_keep)
+            data_sources = {table: path for table, path in final_staged_files.items() if path and path.stat().st_size > 0}
 
-                final_staged_files = self._filter_staged_files(staged_chunk_files, primaryids_to_keep)
-                data_sources = {table: path for table, path in final_staged_files.items() if path}
+            final_demo_path = final_staged_files.get("demo")
+            caseids_to_upsert = set()
+            if final_demo_path and final_demo_path.exists():
+                with open(final_demo_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f, delimiter='$')
+                    caseids_to_upsert = {row['caseid'] for row in reader if row.get('caseid')}
 
-                final_demo_path = final_staged_files.get("demo")
-                caseids_to_upsert = set()
-                if final_demo_path:
-                    with open(final_demo_path, 'r', encoding='utf-8') as f:
-                        reader = csv.DictReader(f, delimiter='$')
-                        caseids_to_upsert = {row['caseid'] for row in reader}
-
-            else:
-                # --- ASCII In-Memory Path ---
-                logger.warning("Detected ASCII format. Using in-memory processing path. This may consume significant memory for large files.")
-                all_records = self._parse_all_from_zip(zip_path)
-                caseids_for_deletion = get_caseids_to_delete(zip_path)
-
-                demo_records = all_records.get("demo", [])
-                if not demo_records:
-                    logger.warning(f"No DEMO records found for quarter {quarter}. Skipping.")
-                    metadata["status"] = "SUCCESS"
-                    return
-
-                primaryids_to_keep = deduplicate_records_in_memory(demo_records)
-
-                final_records = {}
-                for table_name, records in all_records.items():
-                    final_records[table_name] = [r for r in records if r.get('primaryid') in primaryids_to_keep]
-
-                caseids_to_upsert = {r['caseid'] for r in final_records.get("demo", [])}
-
-                # Staging for ASCII path (write to temp files to conform to loader interface)
-                staging_dir = Path(tempfile.mkdtemp(prefix="faers_ascii_staging_"))
-                logger.info(f"Using temporary staging directory for ASCII results: {staging_dir}")
-                data_sources = {}
-                for table_name, records in final_records.items():
-                    if records:
-                        model = FAERS_TABLE_MODELS[table_name]
-                        headers = [field.lower() for field in model.model_fields.keys()]
-                        file_path = staging_dir / f"{table_name}_final.csv"
-                        with file_path.open("w", newline="", encoding="utf-8") as f:
-                            writer = csv.writer(f, delimiter='$')
-                            writer.writerow(headers)
-                            for record in records:
-                                writer.writerow([record.get(h) for h in headers])
-                        data_sources[table_name] = file_path
-
-            # --- Common Loading Logic ---
             if caseids_for_deletion:
                 deleted_count = self.db_loader.execute_deletions(list(caseids_for_deletion))
                 metadata["rows_deleted"] = deleted_count
@@ -256,6 +224,26 @@ class FaersLoaderEngine:
                             if row[primaryid_idx] in primaryids_to_keep:
                                 writer.writerow(row)
         return final_files
+
+    def _stage_ascii_records(self, all_records: Dict[str, List[Dict[str, Any]]], staging_dir: Path) -> Dict[str, List[Path]]:
+        """Writes in-memory records from ASCII files to staged CSV chunks."""
+        logger.info(f"Staging ASCII records to CSV files in {staging_dir}")
+        staged_files: Dict[str, List[Path]] = {name: [] for name in FAERS_TABLE_MODELS.keys()}
+
+        for table_name, records in all_records.items():
+            if records:
+                model = FAERS_TABLE_MODELS[table_name]
+                headers = [field.lower() for field in model.model_fields.keys()]
+                # For ASCII, we assume it fits in a single chunk
+                file_path = staging_dir / f"{table_name}_001.csv"
+
+                with file_path.open("w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f, delimiter='$')
+                    writer.writerow(headers)
+                    for record in records:
+                        writer.writerow([record.get(h) for h in headers])
+                staged_files[table_name].append(file_path)
+        return staged_files
 
     def _parse_all_from_zip(self, zip_path: Path) -> Dict[str, List[Dict[str, Any]]]:
         """Parses all FAERS ASCII tables from a zip file directly into memory."""
