@@ -68,12 +68,13 @@ def get_caseids_to_delete(zip_path: Path) -> Set[str]:
     return case_ids_to_delete
 
 
-def deduplicate_polars(demo_files: List[Path]) -> Set[str]:
+def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
     """
     Applies the FDA-recommended deduplication logic using Polars for scalability.
-    This function can process multiple CSV files in a memory-efficient way.
+    This function can process multiple files (CSV or Parquet) in a memory-efficient way.
 
-    :param demo_files: A list of Path objects pointing to the DEMO CSV files.
+    :param demo_files: A list of Path objects pointing to the DEMO files.
+    :param format: The format of the files ('csv' or 'parquet').
     :return: A set of PRIMARYID strings that should be kept.
     """
     if not demo_files:
@@ -84,21 +85,21 @@ def deduplicate_polars(demo_files: List[Path]) -> Set[str]:
         logger.warning("No valid, non-empty DEMO files found for deduplication.")
         return set()
 
-    logger.info(f"Starting Polars-based deduplication for {len(valid_files)} file(s).")
+    logger.info(f"Starting Polars-based deduplication for {len(valid_files)} {format} file(s).")
 
     try:
-        # Enforce string types for ID fields to prevent incorrect type inference.
-        lazy_query = pl.scan_csv(
-            valid_files,
-            separator="$",
-            has_header=True,
-            ignore_errors=True,
-            schema_overrides={
-                "primaryid": pl.Utf8,
-                "caseid": pl.Utf8,
-                "fda_dt": pl.Utf8,
-            },
-        )
+        if format == 'csv':
+            lazy_query = pl.scan_csv(
+                valid_files,
+                separator="$",
+                has_header=True,
+                ignore_errors=True,
+                schema_overrides={"primaryid": pl.Utf8, "caseid": pl.Utf8, "fda_dt": pl.Utf8},
+            )
+        elif format == 'parquet':
+            lazy_query = pl.scan_parquet(valid_files)
+        else:
+            raise ValueError(f"Unsupported format for deduplication: {format}")
 
         required_cols = {"primaryid", "caseid", "fda_dt"}
         if not required_cols.issubset(lazy_query.columns):

@@ -8,8 +8,131 @@ import tempfile
 from pathlib import Path
 from typing import Iterator, Dict, Any, Type, List, Optional
 from pydantic import BaseModel
+import polars as pl
+
+from .config import ProcessingSettings
 
 logger = logging.getLogger(__name__)
+
+
+def stage_data(
+    record_iterator: Iterator[Dict[str, Any]],
+    table_models: Dict[str, Type[BaseModel]],
+    settings: ProcessingSettings,
+    staging_dir: Optional[Path] = None,
+) -> Dict[str, List[Path]]:
+    """
+    Dispatcher function to stage data to the configured format (CSV or Parquet).
+    """
+    logger.info(f"Staging data to format: {settings.staging_format}")
+    if settings.staging_format == "parquet":
+        return stage_data_to_parquet_files(
+            record_iterator,
+            table_models,
+            settings.chunk_size,
+            staging_dir,
+        )
+    elif settings.staging_format == "csv":
+        return stage_data_to_csv_files(
+            record_iterator,
+            table_models,
+            settings.chunk_size,
+            staging_dir,
+        )
+    else:
+        raise ValueError(f"Unsupported staging format: {settings.staging_format}")
+
+
+def stage_data_to_parquet_files(
+    record_iterator: Iterator[Dict[str, Any]],
+    table_models: Dict[str, Type[BaseModel]],
+    chunk_size: int = 1_000_000,
+    staging_dir: Optional[Path] = None,
+) -> Dict[str, List[Path]]:
+    """
+    Parses a stream of FAERS reports and writes them to chunked Parquet files.
+    """
+    logger.info(
+        f"Staging records to chunked Parquet files with chunk size {chunk_size}."
+    )
+    if staging_dir:
+        temp_dir = staging_dir
+    else:
+        temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_parquet_"))
+    logger.info(f"Using staging directory: {temp_dir}")
+
+    staged_files: Dict[str, List[Path]] = {
+        table_name: [] for table_name in table_models.keys()
+    }
+    record_buffers: Dict[str, List[Dict[str, Any]]] = {
+        table_name: [] for table_name in table_models.keys()
+    }
+    file_counters: Dict[str, int] = {
+        table_name: 0 for table_name in table_models.keys()
+    }
+
+    for report in record_iterator:
+        for table_name, records in report.items():
+            if table_name in record_buffers:
+                record_buffers[table_name].extend(records)
+
+        for table_name, buffer in record_buffers.items():
+            if len(buffer) >= chunk_size:
+                _flush_buffer_to_parquet(
+                    temp_dir,
+                    table_name,
+                    buffer,
+                    file_counters,
+                    staged_files,
+                    table_models[table_name],
+                )
+                buffer.clear()
+
+    for table_name, buffer in record_buffers.items():
+        if buffer:
+            _flush_buffer_to_parquet(
+                temp_dir,
+                table_name,
+                buffer,
+                file_counters,
+                staged_files,
+                table_models[table_name],
+            )
+
+    logger.info("Staging to Parquet files complete.")
+    return staged_files
+
+
+def _flush_buffer_to_parquet(
+    temp_dir: Path,
+    table_name: str,
+    buffer: List[Dict[str, Any]],
+    file_counters: Dict[str, int],
+    staged_files: Dict[str, List[Path]],
+    model: Type[BaseModel],
+) -> None:
+    """Helper to write a buffer of records to a new Parquet file."""
+    if not buffer:
+        return
+
+    chunk_num = file_counters[table_name]
+    file_path = temp_dir / f"{table_name}_chunk_{chunk_num}.parquet"
+    logger.debug(
+        f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}"
+    )
+
+    headers = [field.lower() for field in model.model_fields.keys()]
+
+    # Ensure all records have the same keys, filling missing with None
+    records = [
+        {h: record.get(h) for h in headers} for record in buffer
+    ]
+
+    df = pl.DataFrame(records, schema=headers)
+    df.write_parquet(file_path, compression="zstd")
+
+    staged_files[table_name].append(file_path)
+    file_counters[table_name] += 1
 
 
 def stage_data_to_csv_files(

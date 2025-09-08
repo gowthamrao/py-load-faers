@@ -68,7 +68,7 @@ def test_deduplicate_polars_basic(create_demo_csv):
     expected_ids = {"102", "201"}
 
     demo_file = create_demo_csv(records)
-    result = deduplicate_polars([demo_file])
+    result = deduplicate_polars([demo_file], 'csv')
     assert result == expected_ids
 
 
@@ -81,7 +81,7 @@ def test_deduplicate_polars_tiebreaker(create_demo_csv):
     expected_ids = {"302"}
 
     demo_file = create_demo_csv(records)
-    result = deduplicate_polars([demo_file])
+    result = deduplicate_polars([demo_file], 'csv')
     assert result == expected_ids
 
 
@@ -98,7 +98,7 @@ def test_deduplicate_polars_complex_mix(create_demo_csv):
     expected_ids = {"102", "201", "302"}
 
     demo_file = create_demo_csv(records)
-    result = deduplicate_polars([demo_file])
+    result = deduplicate_polars([demo_file], 'csv')
     assert result == expected_ids
 
 
@@ -117,19 +117,19 @@ def test_deduplicate_polars_multiple_files(create_demo_csv):
     demo_file1 = create_demo_csv(records1, "demo1.csv")
     demo_file2 = create_demo_csv(records2, "demo2.csv")
 
-    result = deduplicate_polars([demo_file1, demo_file2])
+    result = deduplicate_polars([demo_file1, demo_file2], 'csv')
     assert result == expected_ids
 
 
 def test_deduplicate_polars_empty_input():
     """Test that the function handles an empty list of files."""
-    assert deduplicate_polars([]) == set()
+    assert deduplicate_polars([], 'csv') == set()
 
 
 def test_deduplicate_polars_empty_file(create_demo_csv):
     """Test that the function handles a file that is empty or has only a header."""
     demo_file = create_demo_csv([])
-    assert deduplicate_polars([demo_file]) == set()
+    assert deduplicate_polars([demo_file], 'csv') == set()
 
 
 def test_deduplicate_polars_missing_column(tmp_path: Path):
@@ -141,4 +141,4 @@ def test_deduplicate_polars_missing_column(tmp_path: Path):
         writer.writerow(["1", "abc"])
 
     with pytest.raises(ValueError, match="Deduplication failed due to missing columns"):
-        deduplicate_polars([csv_path])
+        deduplicate_polars([csv_path], 'csv')

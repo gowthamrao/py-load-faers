@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel
 
+import io
+import polars as pl
 import psycopg
 from psycopg.rows import dict_row
 
@@ -132,34 +134,47 @@ class PostgresLoader(AbstractDatabaseLoader):
     def execute_native_bulk_load(self, table_name: str, file_path: Path) -> None:
         """
         Load data into PostgreSQL using the COPY command from a file.
-
-        :param table_name: The name of the target table.
-        :param file_path: The path to the source CSV file.
+        This method supports both CSV and Parquet file formats.
         """
         if not self.conn:
             raise ConnectionError("No database connection available.")
         if not file_path.exists() or file_path.stat().st_size == 0:
-            logger.info(
-                f"Skipping bulk load for table '{table_name}' as source file is empty or missing: {file_path}"
-            )
+            logger.info(f"Skipping bulk load for '{table_name}': file is empty or missing.")
             return
 
-        logger.info(
-            f"Starting native bulk load into table '{table_name}' from {file_path}..."
-        )
-        copy_sql = f"""
-            COPY {table_name} FROM STDIN (
-                FORMAT CSV,
-                HEADER TRUE,
-                DELIMITER '$',
-                NULL ''
-            )
-        """
+        logger.info(f"Starting native bulk load for '{table_name}' from {file_path}...")
+
+        file_format = file_path.suffix.lower()
+
         with self.conn.cursor() as cur:
-            with cur.copy(copy_sql) as copy:
-                with open(file_path, "rb") as f:
-                    while data := f.read(8192):
+            if file_format == '.csv':
+                copy_sql = f"COPY {table_name} FROM STDIN (FORMAT CSV, HEADER TRUE, DELIMITER '$', NULL '')"
+                with cur.copy(copy_sql) as copy:
+                    with open(file_path, "rb") as f:
+                        while data := f.read(8192):
+                            copy.write(data)
+            elif file_format == '.parquet':
+                df = pl.read_parquet(file_path)
+                if df.is_empty():
+                    logger.info(f"Skipping bulk load for '{table_name}': Parquet file is empty.")
+                    return
+
+                # Ensure all columns are string type for reliable COPY
+                df = df.with_columns(pl.all().cast(pl.Utf8, strict=False))
+
+                # Use an in-memory buffer to stream CSV data from the Parquet file
+                buffer = io.BytesIO()
+                df.write_csv(buffer, separator="$", has_header=True)
+                buffer.seek(0)
+
+                columns = ", ".join([f'"{col}"' for col in df.columns])
+                copy_sql = f"COPY {table_name} ({columns}) FROM STDIN (FORMAT CSV, HEADER TRUE, DELIMITER '$', NULL '')"
+
+                with cur.copy(copy_sql) as copy:
+                    while data := buffer.read(8192):
                         copy.write(data)
+            else:
+                raise ValueError(f"Unsupported file format for bulk load: {file_format}")
 
         logger.info(f"Bulk load into table '{table_name}' complete.")
 
