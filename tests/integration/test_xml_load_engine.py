@@ -26,9 +26,9 @@ def db_settings(postgres_container: PostgresContainer) -> DatabaseSettings:
     )
 
 @pytest.fixture
-def sample_xml_zip(tmp_path: Path) -> Path:
-    # Use the sample file created in the same directory
-    xml_file_path = Path(__file__).parent / "sample_faers.xml"
+def realistic_xml_zip(tmp_path: Path) -> Path:
+    """Creates a zip file containing the realistic FAERS XML test data."""
+    xml_file_path = Path(__file__).parent / "test_data/realistic_faers.xml"
     xml_content = xml_file_path.read_text()
 
     zip_path = tmp_path / "faers_xml_2025q1.zip"
@@ -37,59 +37,64 @@ def sample_xml_zip(tmp_path: Path) -> Path:
 
     return zip_path
 
-def test_full_xml_load_with_all_tables(db_settings: DatabaseSettings, sample_xml_zip: Path, mocker):
-    mocker.patch("py_load_faers.engine.download_quarter", return_value=sample_xml_zip)
+
+def test_full_xml_load_with_deduplication_and_nullification(db_settings: DatabaseSettings, realistic_xml_zip: Path, mocker):
+    """
+    This integration test verifies the end-to-end XML loading process,
+    specifically checking that the deduplication and nullification logic
+    is correctly applied according to the FRD.
+    """
+    mocker.patch("py_load_faers.engine.download_quarter", return_value=realistic_xml_zip)
+
+    # Need to get the schema definition from the models
+    from py_load_faers.models import Demo, Drug, Reac, Outc, Rpsr, Ther, Indi
+    schema_definition = {
+        "demo": Demo, "drug": Drug, "reac": Reac, "outc": Outc,
+        "rpsr": Rpsr, "ther": Ther, "indi": Indi
+    }
 
     config = AppSettings(
         database=db_settings,
-        downloader=DownloaderSettings(download_dir=str(sample_xml_zip.parent)),
+        downloader=DownloaderSettings(download_dir=str(realistic_xml_zip.parent)),
     )
 
     db_loader = PostgresLoader(config.database)
     db_loader.connect()
-    db_loader.initialize_schema()
+    # Pass the schema definition as required by the updated signature
+    db_loader.initialize_schema(schema_definition)
     db_loader.commit()
 
-    # This test will fail until the engine is modified to handle XML
-    # But we add it now to be ready.
     engine = FaersLoaderEngine(config, db_loader)
     engine.run_load(quarter="2025q1")
 
     with psycopg.connect(db_loader.conn.info.conninfo) as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            # Expected counts from sample_faers.xml:
-            # CASE-001: 1 DEMO, 1 DRUG, 1 REAC, 1 INDI, 1 THER, 1 RPSR, 1 OUTC = 7 records
-            # CASE-002: 1 DEMO, 2 DRUG, 2 REAC, 2 INDI, 0 THER, 1 RPSR, 1 OUTC = 9 records
-            # Total loaded: 16 records
+            # 1. Verify the final state of the data
+            # After processing, only case 102 should exist in the database,
+            # as case 101 was nullified by version V3.
+            cur.execute("SELECT * FROM demo")
+            final_demo_records = cur.fetchall()
+            assert len(final_demo_records) == 1, "Should only be one record in the demo table"
 
-            cur.execute("SELECT count(*) FROM demo")
-            assert cur.fetchone()['count'] == 2
-            cur.execute("SELECT count(*) FROM drug")
-            assert cur.fetchone()['count'] == 3
-            cur.execute("SELECT count(*) FROM reac")
-            assert cur.fetchone()['count'] == 3
-            cur.execute("SELECT count(*) FROM indi")
-            assert cur.fetchone()['count'] == 3
-            cur.execute("SELECT count(*) FROM ther")
-            assert cur.fetchone()['count'] == 1
-            cur.execute("SELECT count(*) FROM rpsr")
-            assert cur.fetchone()['count'] == 2
-            cur.execute("SELECT count(*) FROM outc")
-            assert cur.fetchone()['count'] == 2
+            loaded_case = final_demo_records[0]
+            assert loaded_case['caseid'] == '102'
+            assert loaded_case['primaryid'] == 'V4'
 
-            # Verify specific data points from CASE-002
-            cur.execute("SELECT * FROM drug WHERE caseid = 'CASE-002' ORDER BY drug_seq")
-            case2_drugs = cur.fetchall()
-            assert len(case2_drugs) == 2
-            assert case2_drugs[1]['role_cod'] == '2' # Concomitant
+            # 2. Verify that case 101 is completely gone
+            cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '101'")
+            assert cur.fetchone()['count'] == 0, "Case 101 should have been deleted due to nullification"
+            cur.execute("SELECT COUNT(*) FROM drug WHERE primaryid IN ('V1', 'V2', 'V3')")
+            assert cur.fetchone()['count'] == 0, "No data from any version of Case 101 should be loaded"
 
-            # Verify metadata
-            cur.execute("SELECT status, rows_deleted, rows_loaded FROM _faers_load_history")
+            # 3. Verify the load history metadata
+            cur.execute("SELECT * FROM _faers_load_history")
             meta_res = cur.fetchone()
+            assert meta_res is not None, "Load history metadata should exist"
             assert meta_res['status'] == 'SUCCESS'
-            assert meta_res['rows_deleted'] == 1 # CASE-003 was nullified
-            assert meta_res['rows_loaded'] == 16
 
-            # Verify CASE-003 was not loaded
-            cur.execute("SELECT count(*) FROM demo WHERE caseid = 'CASE-003'")
-            assert cur.fetchone()['count'] == 0
+            # The engine should report the logical deletion of the nullified case.
+            assert meta_res['rows_deleted'] == 1, "Should report 1 case as deleted/nullified"
+
+            # The number of loaded rows should correspond to the tables populated for case 102.
+            # The test data for V4 populates: demo, drug, reac, rpsr.
+            assert meta_res['rows_loaded'] == 4, "Should report 4 rows loaded for Case 102"

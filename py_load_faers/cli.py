@@ -78,6 +78,8 @@ def run(
             db_loader.conn.close()
 
 
+from .models import FAERS_TABLE_MODELS
+
 @app.command()
 def db_init(
     profile: str = typer.Option("dev", "--profile", "-p", help="The configuration profile to use."),
@@ -96,7 +98,8 @@ def db_init(
         loader.connect()
         loader.begin_transaction()
         logger.info("Initializing database schema...")
-        loader.initialize_schema()
+        # Pass the schema definition to the method
+        loader.initialize_schema(FAERS_TABLE_MODELS)
         loader.commit()
         logger.info("Database schema initialization complete.")
     except Exception as e:

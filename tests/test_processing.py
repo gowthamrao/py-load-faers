@@ -143,3 +143,48 @@ def test_deduplicate_in_memory_missing_columns():
     records = [{'caseid': '1', 'primaryid': '101'}]  # Missing 'fda_dt'
     with pytest.raises(ValueError, match="missing required columns"):
         deduplicate_records_in_memory(records)
+
+
+def test_xml_parsing_and_processing_logic(tmp_path: Path):
+    """
+    Tests the combined logic of parsing an XML, handling nullifications,
+    and deduplicating the results in memory.
+    """
+    from py_load_faers.parser import parse_xml_file
+    from py_load_faers.processing import deduplicate_records_in_memory
+
+    # 1. Get the realistic test data
+    xml_file_path = Path(__file__).parent / "integration/test_data/realistic_faers.xml"
+
+    # 2. Parse the XML file
+    with xml_file_path.open('rb') as f:
+        # The parser returns a generator and the set of nullified case IDs
+        record_generator, nullified_case_ids = parse_xml_file(f)
+
+        # Consume the generator to get all records
+        all_records = list(record_generator)
+
+    # 3. Verify the parser's nullification output
+    # From the test file, V3 is a nullification for case '101'
+    assert nullified_case_ids == {'101'}
+
+    # 4. Simulate the pre-processing filtering step
+    # The engine should filter out any records belonging to a nullified case
+
+    # Flatten the list of dictionaries of lists into a list of dictionaries for demo table
+    all_demo_records = [item for record_dict in all_records for item in record_dict.get('demo', [])]
+
+    filtered_demo_records = [
+        rec for rec in all_demo_records if rec['caseid'] not in nullified_case_ids
+    ]
+
+    # After filtering, only records for case '102' should remain
+    assert len(filtered_demo_records) == 1
+    assert filtered_demo_records[0]['caseid'] == '102'
+
+    # 5. Pass the filtered records to the deduplication function
+    primary_ids_to_keep = deduplicate_records_in_memory(filtered_demo_records)
+
+    # 6. Assert the final result
+    # Only the primaryid for case '102' should be left
+    assert primary_ids_to_keep == {'V4'}

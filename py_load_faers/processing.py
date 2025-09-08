@@ -177,9 +177,9 @@ def deduplicate_records_in_memory(demo_records: List[Dict[str, Any]]) -> Set[str
         missing_cols = required_cols - set(df.columns)
         raise ValueError(f"Input data is missing required columns for deduplication: {missing_cols}")
 
-    # Convert types, coercing errors to nulls
-    df['caseid'] = pd.to_numeric(df['caseid'], errors='coerce')
-    df['primaryid'] = pd.to_numeric(df['primaryid'], errors='coerce')
+    # Ensure columns are treated as strings, except for the date
+    df['caseid'] = df['caseid'].astype(str)
+    df['primaryid'] = df['primaryid'].astype(str)
     df['fda_dt'] = pd.to_datetime(df['fda_dt'], format='%Y%m%d', errors='coerce')
     df.dropna(subset=['caseid', 'primaryid', 'fda_dt'], inplace=True)
 
@@ -191,7 +191,7 @@ def deduplicate_records_in_memory(demo_records: List[Dict[str, Any]]) -> Set[str
     )
 
     df_deduplicated = df.drop_duplicates(subset='caseid', keep='first')
-    primary_ids_to_keep = set(df_deduplicated['primaryid'].astype(int).astype(str))
+    primary_ids_to_keep = set(df_deduplicated['primaryid'])
 
     logger.info(f"In-memory deduplication complete. {len(primary_ids_to_keep)} unique cases to keep.")
     return primary_ids_to_keep

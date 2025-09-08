@@ -1,0 +1,85 @@
+<ichicsr>
+  <!--
+    Test Scenario:
+    - Case 101 has three versions.
+    - V1 is the oldest.
+    - V2 is the newest by receiptdate and should be the one selected.
+    - V3 is a nullification and should be ignored.
+    - Case 102 has only one version and should be selected.
+  -->
+
+  <!-- Case 101, Version 1 (Old) -->
+  <safetyreport>
+    <case>
+      <caseid>101</caseid>
+    </case>
+    <safetyreportid>V1</safetyreportid>
+    <receiptdate>20240101</receiptdate>
+    <primarysource>
+      <reportercountry>US</reportercountry>
+    </primarysource>
+    <patient>
+      <patientsex>F</patientsex>
+      <reaction>
+        <reactionmeddrapt>Headache</reactionmeddrapt>
+      </reaction>
+      <drug>
+        <drugsequencenumber>1</drugsequencenumber>
+        <medicinalproduct>Drug A</medicinalproduct>
+      </drug>
+    </patient>
+  </safetyreport>
+
+  <!-- Case 101, Version 2 (Latest) -->
+  <safetyreport>
+    <case>
+      <caseid>101</caseid>
+    </case>
+    <safetyreportid>V2</safetyreportid>
+    <receiptdate>20240201</receiptdate>
+    <primarysource>
+      <reportercountry>US</reportercountry>
+    </primarysource>
+    <patient>
+      <patientsex>F</patientsex>
+      <reaction>
+        <reactionmeddrapt>Severe Headache</reactionmeddrapt> <!-- Updated reaction -->
+      </reaction>
+      <drug>
+        <drugsequencenumber>1</drugsequencenumber>
+        <medicinalproduct>Drug A</medicinalproduct>
+      </drug>
+    </patient>
+  </safetyreport>
+
+  <!-- Case 101, Version 3 (Nullified) -->
+  <safetyreport>
+    <case>
+      <caseid>101</caseid>
+    </case>
+    <safetyreportid>V3</safetyreportid>
+    <safetyreportnullification>1</safetyreportnullification>
+  </safetyreport>
+
+  <!-- Case 102, Single Version -->
+  <safetyreport>
+    <case>
+      <caseid>102</caseid>
+    </case>
+    <safetyreportid>V4</safetyreportid>
+    <receiptdate>20240301</receiptdate>
+    <primarysource>
+      <reportercountry>CA</reportercountry>
+    </primarysource>
+    <patient>
+      <patientsex>M</patientsex>
+      <reaction>
+        <reactionmeddrapt>Nausea</reactionmeddrapt>
+      </reaction>
+      <drug>
+        <drugsequencenumber>1</drugsequencenumber>
+        <medicinalproduct>Drug B</medicinalproduct>
+      </drug>
+    </patient>
+  </safetyreport>
+</ichicsr>
