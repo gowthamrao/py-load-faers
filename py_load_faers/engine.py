@@ -88,6 +88,10 @@ class FaersLoaderEngine:
             self.db_loader.commit()
             logger.info("Load process completed successfully and transaction committed.")
 
+            # Run post-load DQ checks after a successful commit
+            logger.info("Proceeding to post-load data quality checks...")
+            self.db_loader.run_post_load_dq_checks()
+
         except Exception as e:
             logger.error(f"An error occurred during the loading process: {e}", exc_info=True)
             if self.db_loader.conn:

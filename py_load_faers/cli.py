@@ -114,3 +114,32 @@ def db_init(
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def db_verify(
+    profile: str = typer.Option("dev", "--profile", "-p", help="The configuration profile to use."),
+):
+    """
+    Run data quality checks on the existing database.
+    Verifies the integrity of the loaded data, e.g., checking for duplicates.
+    """
+    settings = config.load_config(profile=profile)
+    logger.info(f"Running data quality verification on profile '{profile}'.")
+
+    if settings.db.type != "postgresql":
+        logger.error(f"Unsupported database type: {settings.db.type}. Only 'postgresql' is currently supported.")
+        raise typer.Exit(code=1)
+
+    loader = PostgresLoader(settings.db)
+    try:
+        loader.connect()
+        # No transaction needed for read-only checks
+        loader.run_post_load_dq_checks()
+        logger.info("Data quality verification completed successfully.")
+    except Exception as e:
+        logger.error(f"Data quality verification failed: {e}", exc_info=True)
+        raise typer.Exit(code=1)
+    finally:
+        if loader.conn:
+            loader.conn.close()
