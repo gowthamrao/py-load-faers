@@ -17,9 +17,7 @@ class Demo(BaseModel):
         ...,
         description="The unique identifier for a specific version of a case report.",
     )
-    caseid: str = Field(
-        ..., description="A unique identifier for an adverse event case."
-    )
+    caseid: str = Field(..., description="A unique identifier for an adverse event case.")
     caseversion: Optional[str] = None
     i_f_code: Optional[str] = None
     event_dt: Optional[str] = None

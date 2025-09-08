@@ -5,6 +5,7 @@ This module provides functions for staging parsed data for bulk loading.
 import csv
 import logging
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Iterator, Dict, Any, Type, List, Optional
 from pydantic import BaseModel
@@ -52,24 +53,18 @@ def stage_data_to_parquet_files(
     """
     Parses a stream of FAERS reports and writes them to chunked Parquet files.
     """
-    logger.info(
-        f"Staging records to chunked Parquet files with chunk size {chunk_size}."
-    )
+    logger.info(f"Staging records to chunked Parquet files with chunk size {chunk_size}.")
     if staging_dir:
         temp_dir = staging_dir
     else:
         temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_parquet_"))
     logger.info(f"Using staging directory: {temp_dir}")
 
-    staged_files: Dict[str, List[Path]] = {
-        table_name: [] for table_name in table_models.keys()
-    }
+    staged_files: Dict[str, List[Path]] = {table_name: [] for table_name in table_models.keys()}
     record_buffers: Dict[str, List[Dict[str, Any]]] = {
         table_name: [] for table_name in table_models.keys()
     }
-    file_counters: Dict[str, int] = {
-        table_name: 0 for table_name in table_models.keys()
-    }
+    file_counters: Dict[str, int] = {table_name: 0 for table_name in table_models.keys()}
 
     for report in record_iterator:
         for table_name, records in report.items():
@@ -117,16 +112,12 @@ def _flush_buffer_to_parquet(
 
     chunk_num = file_counters[table_name]
     file_path = temp_dir / f"{table_name}_chunk_{chunk_num}.parquet"
-    logger.debug(
-        f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}"
-    )
+    logger.debug(f"Flushing {len(buffer)} records for table '{table_name}' to " f"{file_path}")
 
     headers = [field.lower() for field in model.model_fields.keys()]
 
     # Ensure all records have the same keys, filling missing with None
-    records = [
-        {h: record.get(h) for h in headers} for record in buffer
-    ]
+    records = [{h: record.get(h) for h in headers} for record in buffer]
 
     df = pl.DataFrame(records, schema=headers)
     df.write_parquet(file_path, compression="zstd")
@@ -142,13 +133,17 @@ def stage_data_to_csv_files(
     staging_dir: Optional[Path] = None,
 ) -> Dict[str, List[Path]]:
     """
-    Parses a stream of FAERS reports and writes them to chunked, temporary CSV files.
+    Parses a stream of FAERS reports and writes them to chunked, temporary
+    CSV files.
 
     :param record_iterator: An iterator that yields parsed FAERS reports.
     :param table_models: A dictionary mapping table names to Pydantic models.
-    :param chunk_size: The number of records to hold in memory per table before flushing to a file.
-    :param staging_dir: An optional path to a directory for staging files. If not provided, a new one is created.
-    :return: A dictionary mapping table names to a list of paths to the created CSV files.
+    :param chunk_size: The number of records to hold in memory per table
+        before flushing to a file.
+    :param staging_dir: An optional path to a directory for staging files. If
+        not provided, a new one is created.
+    :return: A dictionary mapping table names to a list of paths to the
+        created CSV files.
     """
     logger.info(f"Staging records to chunked CSV files with chunk size {chunk_size}.")
     if staging_dir:
@@ -157,15 +152,11 @@ def stage_data_to_csv_files(
         temp_dir = Path(tempfile.mkdtemp(prefix="faers_staging_"))
     logger.info(f"Using staging directory: {temp_dir}")
 
-    staged_files: Dict[str, List[Path]] = {
-        table_name: [] for table_name in table_models.keys()
-    }
+    staged_files: Dict[str, List[Path]] = {table_name: [] for table_name in table_models.keys()}
     record_buffers: Dict[str, List[Dict[str, Any]]] = {
         table_name: [] for table_name in table_models.keys()
     }
-    file_counters: Dict[str, int] = {
-        table_name: 0 for table_name in table_models.keys()
-    }
+    file_counters: Dict[str, int] = {table_name: 0 for table_name in table_models.keys()}
 
     for report in record_iterator:
         for table_name, records in report.items():
@@ -212,9 +203,7 @@ def _flush_buffer_to_disk(
     """Helper to write a buffer of records to a new CSV file."""
     chunk_num = file_counters[table_name]
     file_path = temp_dir / f"{table_name}_chunk_{chunk_num}.csv"
-    logger.debug(
-        f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}"
-    )
+    logger.debug(f"Flushing {len(buffer)} records for table '{table_name}' to {file_path}")
 
     headers = [field.lower() for field in model.model_fields.keys()]
 
@@ -227,8 +216,6 @@ def _flush_buffer_to_disk(
     staged_files[table_name].append(file_path)
     file_counters[table_name] += 1
 
-
-import zipfile
 
 def extract_zip_archive(zip_path: Path, extract_to_dir: Path) -> List[Path]:
     """

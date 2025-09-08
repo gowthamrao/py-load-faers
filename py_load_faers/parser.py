@@ -16,8 +16,8 @@ def parse_ascii_quarter(
     quarter_dir: Path,
 ) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
     """
-    Parses a directory of unzipped FAERS ASCII files for a single quarter using a
-    more memory-efficient, separated-table approach.
+    Parses a directory of unzipped FAERS ASCII files for a single quarter
+    using a more memory-efficient, separated-table approach.
     """
     nullified_case_ids = _parse_deletion_file(quarter_dir)
     faers_data = _load_ascii_tables_to_polars(quarter_dir)
@@ -27,9 +27,7 @@ def parse_ascii_quarter(
         return iter([]), nullified_case_ids
 
     # Filter out nullified cases from the main demo table first
-    df_demo = faers_data["demo"].filter(
-        ~pl.col("caseid").is_in(list(nullified_case_ids))
-    )
+    df_demo = faers_data["demo"].filter(~pl.col("caseid").is_in(list(nullified_case_ids)))
 
     # Get the set of primaryids that we need to keep for all other tables
     primaryids_to_keep = df_demo["primaryid"].to_list()
@@ -55,9 +53,7 @@ def parse_ascii_quarter(
                 table_records = []
                 if df_table is not None and not df_table.is_empty():
                     # Filter the already-reduced table for the specific primary_id
-                    records = df_table.filter(
-                        pl.col("primaryid") == primary_id
-                    ).to_dicts()
+                    records = df_table.filter(pl.col("primaryid") == primary_id).to_dicts()
 
                     # Add caseid for consistency
                     for r in records:
@@ -89,7 +85,7 @@ def _parse_deletion_file(quarter_dir: Path) -> Set[str]:
                             nullified_case_ids.add(row[caseid_idx])
                 except (StopIteration, ValueError):
                     logger.warning(
-                        f"Could not read header or find 'caseid' column in {deletion_file}"
+                        f"Could not read header or find 'caseid' column in " f"{deletion_file}"
                     )
             logger.info(f"Found {len(nullified_case_ids)} case IDs for deletion.")
             return nullified_case_ids
@@ -102,7 +98,10 @@ def _parse_deletion_file(quarter_dir: Path) -> Set[str]:
 def _load_ascii_tables_to_polars(
     quarter_dir: Path,
 ) -> Dict[str, pl.DataFrame]:
-    """Loads all recognized FAERS table files from a directory into Polars DataFrames."""
+    """
+    Loads all recognized FAERS table files from a directory into Polars
+    DataFrames.
+    """
     table_names = ["demo", "drug", "reac", "outc", "rpsr", "ther", "indi"]
     dataframes: Dict[str, pl.DataFrame] = {}
 
@@ -131,10 +130,12 @@ def _load_ascii_tables_to_polars(
 
 def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
     """
-    Parses a FAERS XML data file from a stream using a memory-efficient approach.
+    Parses a FAERS XML data file from a stream using a memory-efficient
+    approach.
 
     :param xml_stream: A file-like object (stream) containing the XML data.
-    :return: A tuple containing an iterator for safety reports and a set of nullified case IDs.
+    :return: A tuple containing an iterator for safety reports and a set of
+        nullified case IDs.
     """
     from lxml import etree
     from typing import Set
@@ -151,7 +152,8 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
             context = etree.iterparse(xml_stream, events=("end",), tag="safetyreport")
             for event, elem in context:
                 primary_id = element_text(elem, "safetyreportid")
-                # Per ICH E2B, the caseid is nested. Using the path from our test data.
+                # Per ICH E2B, the caseid is nested. Using the path from our
+                # test data.
                 case_id = element_text(elem, "case/caseid")
 
                 if not primary_id or not case_id:
@@ -185,9 +187,7 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                         "sex": element_text(patient, "patientsex"),
                         "age": element_text(patient, "patientonsetage"),
                         "age_cod": element_text(patient, "patientonsetageunit"),
-                        "reporter_country": element_text(
-                            elem, "primarysource/reportercountry"
-                        ),
+                        "reporter_country": element_text(elem, "primarysource/reportercountry"),
                         "occr_country": element_text(elem, "occurcountry"),
                     }
                 )
@@ -254,17 +254,13 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                     del elem.getparent()[0]
             del context
         except Exception as e:
-            logger.error(
-                f"An unexpected error occurred during XML parsing: {e}", exc_info=True
-            )
+            logger.error(f"An unexpected error occurred during XML parsing: {e}", exc_info=True)
             raise
 
     return record_generator(), nullified_case_ids
 
 
-def parse_ascii_file(
-    file_path: Path, encoding: str = "utf-8"
-) -> Iterator[Dict[str, Any]]:
+def parse_ascii_file(file_path: Path, encoding: str = "utf-8") -> Iterator[Dict[str, Any]]:
     """
     Parses a dollar-delimited FAERS ASCII data file.
 

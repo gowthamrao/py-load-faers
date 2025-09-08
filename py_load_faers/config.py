@@ -5,6 +5,7 @@ This module handles the configuration management for the FAERS loader.
 It uses a hierarchical configuration approach, allowing settings to be loaded
 from a YAML file, environment variables, and CLI arguments.
 """
+import os
 import yaml
 from pathlib import Path
 from typing import Optional, Literal
@@ -38,12 +39,10 @@ class DownloaderSettings(BaseModel):
 class ProcessingSettings(BaseModel):
     """Configuration for data processing."""
 
-    chunk_size: int = Field(
-        500_000, description="Number of records to process in a single chunk."
-    )
+    chunk_size: int = Field(500_000, description="Number of records to process in a single chunk.")
     staging_format: Literal["csv", "parquet"] = Field(
         "parquet",
-        description="The intermediate file format for staging data before loading.",
+        description=("The intermediate file format for staging data before loading."),
     )
 
 
@@ -66,9 +65,7 @@ class AppSettings(BaseSettings):
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)
     downloader: DownloaderSettings = Field(default_factory=DownloaderSettings)
     processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
-    log_level: str = Field(
-        "INFO", description="Logging level (e.g., DEBUG, INFO, WARNING)."
-    )
+    log_level: str = Field("INFO", description="Logging level (e.g., DEBUG, INFO, WARNING).")
 
     @classmethod
     def from_yaml(cls, path: Path) -> "AppSettings":
@@ -82,12 +79,7 @@ class AppSettings(BaseSettings):
         return cls.model_validate(config_data)
 
 
-import os
-
-
-def load_config(
-    profile: Optional[str] = None, config_file: Optional[str] = None
-) -> AppSettings:
+def load_config(profile: Optional[str] = None, config_file: Optional[str] = None) -> AppSettings:
     """
     Load application configuration.
 
@@ -130,9 +122,7 @@ def load_config(
             if os.getenv("PY_LOAD_FAERS_DB__DBNAME") is None:
                 env_settings.db.dbname = file_settings.db.dbname
             if os.getenv("PY_LOAD_FAERS_DOWNLOADER__DOWNLOAD_DIR") is None:
-                env_settings.downloader.download_dir = (
-                    file_settings.downloader.download_dir
-                )
+                env_settings.downloader.download_dir = file_settings.downloader.download_dir
             if os.getenv("PY_LOAD_FAERS_LOG_LEVEL") is None:
                 env_settings.log_level = file_settings.log_level
 

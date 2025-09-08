@@ -30,12 +30,15 @@ class PostgresLoader(AbstractDatabaseLoader):
         """Establish a connection to the PostgreSQL database."""
         try:
             logger.info(
-                f"Connecting to PostgreSQL database '{self.settings.dbname}' on host '{self.settings.host}'..."
+                f"Connecting to PostgreSQL database '{self.settings.dbname}' "
+                f"on host '{self.settings.host}'..."
             )
             self.conn = psycopg.connect(
-                conninfo=f"host={self.settings.host} port={self.settings.port} "
-                f"dbname={self.settings.dbname} user={self.settings.user} "
-                f"password={self.settings.password}",
+                conninfo=(
+                    f"host={self.settings.host} port={self.settings.port} "
+                    f"dbname={self.settings.dbname} user={self.settings.user} "
+                    f"password={self.settings.password}"
+                ),
                 row_factory=dict_row,
             )
             logger.info("Database connection successful.")
@@ -78,9 +81,7 @@ class PostgresLoader(AbstractDatabaseLoader):
         # The caller is responsible for committing the transaction.
         logger.info("Schema initialization complete.")
 
-    def _generate_create_table_ddl(
-        self, table_name: str, model: Type[BaseModel]
-    ) -> str:
+    def _generate_create_table_ddl(self, table_name: str, model: Type[BaseModel]) -> str:
         """Generate a CREATE TABLE statement from a Pydantic model."""
 
         def pydantic_to_sql_type(field: Any) -> str:
@@ -93,9 +94,7 @@ class PostgresLoader(AbstractDatabaseLoader):
             # Check if the type is Optional
             if type(None) in getattr(field.annotation, "__args__", []):
                 # It's Optional, get the inner type
-                inner_type = [
-                    arg for arg in field.annotation.__args__ if arg is not type(None)
-                ][0]
+                inner_type = [arg for arg in field.annotation.__args__ if arg is not type(None)][0]
                 return type_map.get(inner_type, "TEXT")
             return type_map.get(field.annotation, "TEXT")
 
@@ -147,13 +146,16 @@ class PostgresLoader(AbstractDatabaseLoader):
         file_format = file_path.suffix.lower()
 
         with self.conn.cursor() as cur:
-            if file_format == '.csv':
-                copy_sql = f"COPY {table_name} FROM STDIN (FORMAT CSV, HEADER TRUE, DELIMITER '$', NULL '')"
+            if file_format == ".csv":
+                copy_sql = (
+                    f"COPY {table_name} FROM STDIN (FORMAT CSV, HEADER TRUE, "
+                    "DELIMITER '$', NULL '')"
+                )
                 with cur.copy(copy_sql) as copy:
                     with open(file_path, "rb") as f:
                         while data := f.read(8192):
                             copy.write(data)
-            elif file_format == '.parquet':
+            elif file_format == ".parquet":
                 df = pl.read_parquet(file_path)
                 if df.is_empty():
                     logger.info(f"Skipping bulk load for '{table_name}': Parquet file is empty.")
@@ -168,7 +170,10 @@ class PostgresLoader(AbstractDatabaseLoader):
                 buffer.seek(0)
 
                 columns = ", ".join([f'"{col}"' for col in df.columns])
-                copy_sql = f"COPY {table_name} ({columns}) FROM STDIN (FORMAT CSV, HEADER TRUE, DELIMITER '$', NULL '')"
+                copy_sql = (
+                    f"COPY {table_name} ({columns}) FROM STDIN (FORMAT CSV, "
+                    "HEADER TRUE, DELIMITER '$', NULL '')"
+                )
 
                 with cur.copy(copy_sql) as copy:
                     while data := buffer.read(8192):
@@ -193,23 +198,20 @@ class PostgresLoader(AbstractDatabaseLoader):
 
         logger.info(f"Starting deletion for {len(case_ids)} case_ids.")
 
-        # We need to get the corresponding primaryid values from the demo table first,
-        # as other tables are linked via primaryid.
+        # We need to get the corresponding primaryid values from the demo
+        # table first, as other tables are linked via primaryid.
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT primaryid FROM demo WHERE caseid = ANY(%s)", (list(case_ids),)
+                "SELECT primaryid FROM demo WHERE caseid = ANY(%s)",
+                (list(case_ids),),
             )
             primary_ids = [row["primaryid"] for row in cur.fetchall()]
 
         if not primary_ids:
-            logger.info(
-                "No matching primary_ids found for the given case_ids. Nothing to delete."
-            )
+            logger.info("No matching primary_ids found for the given case_ids. Nothing to delete.")
             return 0
 
-        logger.info(
-            f"Found {len(primary_ids)} primary_ids to delete across all tables."
-        )
+        logger.info(f"Found {len(primary_ids)} primary_ids to delete across all " "tables.")
 
         total_rows_deleted = 0
         faers_tables = ["ther", "rpsr", "reac", "outc", "indi", "drug", "demo"]
@@ -265,12 +267,13 @@ class PostgresLoader(AbstractDatabaseLoader):
         # SQL to insert or update the load history record
         sql = """
             INSERT INTO _faers_load_history (
-                load_id, quarter, load_type, start_timestamp, end_timestamp,
-                status, source_checksum, rows_extracted, rows_loaded,
-                rows_updated, rows_deleted
+                load_id, quarter, load_type, start_timestamp,
+                end_timestamp, status, source_checksum, rows_extracted,
+                rows_loaded, rows_updated, rows_deleted
             ) VALUES (
-                %(load_id)s, %(quarter)s, %(load_type)s, %(start_timestamp)s, %(end_timestamp)s,
-                %(status)s, %(source_checksum)s, %(rows_extracted)s, %(rows_loaded)s,
+                %(load_id)s, %(quarter)s, %(load_type)s,
+                %(start_timestamp)s, %(end_timestamp)s, %(status)s,
+                %(source_checksum)s, %(rows_extracted)s, %(rows_loaded)s,
                 %(rows_updated)s, %(rows_deleted)s
             )
             ON CONFLICT (load_id) DO UPDATE SET
@@ -299,28 +302,30 @@ class PostgresLoader(AbstractDatabaseLoader):
 
         # R60: Verify that deduplication was successful.
         # The number of unique caseids should equal the total number of rows.
-        dq_sql = "SELECT COUNT(DISTINCT caseid) as distinct_caseids, COUNT(*) as total_rows FROM demo;"
+        dq_sql = (
+            "SELECT COUNT(DISTINCT caseid) as distinct_caseids, COUNT(*) as total_rows FROM demo;"
+        )
 
         with self.conn.cursor() as cur:
             cur.execute(dq_sql)
             result = cur.fetchone()
 
         if not result:
-            raise DataQualityError(
-                "Could not retrieve DQ check results from the demo table."
-            )
+            raise DataQualityError("Could not retrieve DQ check results from the demo table.")
 
         distinct_caseids = result.get("distinct_caseids", 0)
         total_rows = result.get("total_rows", -1)
 
         if distinct_caseids == total_rows:
             logger.info(
-                f"DQ Check Passed: DEMO table contains {total_rows} rows, all with unique CASEIDs."
+                f"DQ Check Passed: DEMO table contains {total_rows} rows, "
+                "all with unique CASEIDs."
             )
         else:
             error_msg = (
-                f"DQ Check FAILED: Deduplication error detected in DEMO table. "
-                f"Found {total_rows} total rows but only {distinct_caseids} unique CASEIDs."
+                "DQ Check FAILED: Deduplication error detected in DEMO "
+                f"table. Found {total_rows} total rows but only "
+                f"{distinct_caseids} unique CASEIDs."
             )
             logger.error(error_msg)
             raise DataQualityError(error_msg)

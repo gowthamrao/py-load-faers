@@ -66,9 +66,7 @@ def find_latest_quarter() -> Optional[str]:
                 quarters.append(match.group(1))
 
         if not quarters:
-            logger.warning(
-                "Could not parse any quarter strings from the download links."
-            )
+            logger.warning("Could not parse any quarter strings from the download links.")
             return None
 
         # Sort quarters to find the latest (e.g., "2025q2" > "2025q1")
@@ -81,9 +79,7 @@ def find_latest_quarter() -> Optional[str]:
         return None
 
 
-def download_quarter(
-    quarter: str, settings: DownloaderSettings
-) -> Optional[Tuple[Path, str]]:
+def download_quarter(quarter: str, settings: DownloaderSettings) -> Optional[Tuple[Path, str]]:
     """
     Download a specific FAERS quarter data file.
 
