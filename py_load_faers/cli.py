@@ -9,13 +9,13 @@ import typer
 
 from . import config
 from . import downloader
+from .engine import FaersLoaderEngine
+from .models import FAERS_TABLE_MODELS
 from py_load_faers_postgres.loader import PostgresLoader
 
 app = typer.Typer(help="A high-performance ETL tool for FAERS data.")
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +25,10 @@ def download(
         None,
         "--quarter",
         "-q",
-        help="The specific quarter to download (e.g., '2025q1'). If not provided, the latest will be downloaded.",
+        help=(
+            "The specific quarter to download (e.g., '2025q1'). "
+            "If not provided, the latest will be downloaded."
+        ),
     ),
     profile: str = typer.Option(
         "dev", "--profile", "-p", help="The configuration profile to use."
@@ -41,15 +44,12 @@ def download(
 
     if not target_quarter:
         logger.error(
-            "Could not determine a quarter to download. Please specify one with --quarter."
+            "Could not determine a quarter to download. " "Please specify one with --quarter."
         )
         raise typer.Exit(code=1)
 
     downloader.download_quarter(target_quarter, settings.downloader)
     logger.info("Download process finished.")
-
-
-from .engine import FaersLoaderEngine
 
 
 @app.command()
@@ -58,10 +58,16 @@ def run(
         None,
         "--quarter",
         "-q",
-        help="The specific quarter to process (e.g., '2025q1'). If not provided, the mode will determine behavior.",
+        help=(
+            "The specific quarter to process (e.g., '2025q1'). "
+            "If not provided, the mode will determine behavior."
+        ),
     ),
     mode: str = typer.Option(
-        "delta", "--mode", "-m", help="The load mode: 'delta' (default) or 'partial'."
+        "delta",
+        "--mode",
+        "-m",
+        help="The load mode: 'delta' (default) or 'partial'.",
     ),
     profile: str = typer.Option(
         "dev", "--profile", "-p", help="The configuration profile to use."
@@ -77,7 +83,8 @@ def run(
 
     if settings.db.type != "postgresql":
         logger.error(
-            f"Unsupported database type: {settings.db.type}. Only 'postgresql' is currently supported."
+            f"Unsupported database type: {settings.db.type}. "
+            "Only 'postgresql' is currently supported."
         )
         raise typer.Exit(code=1)
 
@@ -95,9 +102,6 @@ def run(
             db_loader.conn.close()
 
 
-from .models import FAERS_TABLE_MODELS
-
-
 @app.command()
 def db_init(
     profile: str = typer.Option(
@@ -110,7 +114,8 @@ def db_init(
     # For now, we hardcode the PostgresLoader. This will be dynamic in the future.
     if settings.db.type != "postgresql":
         logger.error(
-            f"Unsupported database type: {settings.db.type}. Only 'postgresql' is currently supported."
+            f"Unsupported database type: {settings.db.type}. "
+            "Only 'postgresql' is currently supported."
         )
         raise typer.Exit(code=1)
 
@@ -125,9 +130,7 @@ def db_init(
         loader.commit()
         logger.info("Database schema initialization complete.")
     except Exception as e:
-        logger.error(
-            f"An error occurred during database initialization: {e}", exc_info=True
-        )
+        logger.error(f"An error occurred during database initialization: {e}", exc_info=True)
         if loader.conn:
             loader.rollback()
         raise typer.Exit(code=1)
@@ -155,7 +158,8 @@ def db_verify(
 
     if settings.db.type != "postgresql":
         logger.error(
-            f"Unsupported database type: {settings.db.type}. Only 'postgresql' is currently supported."
+            f"Unsupported database type: {settings.db.type}. "
+            "Only 'postgresql' is currently supported."
         )
         raise typer.Exit(code=1)
 

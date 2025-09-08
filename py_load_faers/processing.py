@@ -60,9 +60,7 @@ def get_caseids_to_delete(zip_path: Path) -> Set[str]:
         logger.error(f"The file {zip_path} is not a valid zip file.")
         raise
     except Exception as e:
-        logger.error(
-            f"An error occurred while processing deletion file in {zip_path}: {e}"
-        )
+        logger.error(f"An error occurred while processing deletion file in {zip_path}: {e}")
         raise
 
     return case_ids_to_delete
@@ -88,15 +86,19 @@ def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
     logger.info(f"Starting Polars-based deduplication for {len(valid_files)} {format} file(s).")
 
     try:
-        if format == 'csv':
+        if format == "csv":
             lazy_query = pl.scan_csv(
                 valid_files,
                 separator="$",
                 has_header=True,
                 ignore_errors=True,
-                schema_overrides={"primaryid": pl.Utf8, "caseid": pl.Utf8, "fda_dt": pl.Utf8},
+                schema_overrides={
+                    "primaryid": pl.Utf8,
+                    "caseid": pl.Utf8,
+                    "fda_dt": pl.Utf8,
+                },
             )
-        elif format == 'parquet':
+        elif format == "parquet":
             lazy_query = pl.scan_parquet(valid_files)
         else:
             raise ValueError(f"Unsupported format for deduplication: {format}")
@@ -106,29 +108,28 @@ def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
             missing = required_cols - set(lazy_query.columns)
             raise ValueError(f"Deduplication failed due to missing columns: {missing}")
 
-        deduplicated_query = (
-            lazy_query.select(["primaryid", "caseid", "fda_dt"])
-            .with_columns(
-                pl.col("fda_dt")
-                .str.to_date("%Y%m%d", strict=False)
-                .alias("fda_dt_parsed")
-            )
-            .drop_nulls(subset=["primaryid", "caseid", "fda_dt_parsed"])
-            .sort(
-                by=["caseid", "fda_dt_parsed", "primaryid"],
-                descending=[False, True, True],
-            )
-            .unique(subset="caseid", keep="first", maintain_order=True)
-            .select("primaryid")
+        deduplicated_query = lazy_query.select(["primaryid", "caseid", "fda_dt"]).with_columns(
+            pl.col("fda_dt").str.to_date("%Y%m%d", strict=False).alias("fda_dt_parsed")
         )
+        deduplicated_query = deduplicated_query.drop_nulls(
+            subset=["primaryid", "caseid", "fda_dt_parsed"]
+        ).sort(
+            by=["caseid", "fda_dt_parsed", "primaryid"],
+            descending=[False, True, True],
+        )
+        deduplicated_query = deduplicated_query.unique(
+            subset="caseid", keep="first", maintain_order=True
+        ).select("primaryid")
 
         try:
             result_df = deduplicated_query.collect(streaming=True)
         except BaseException as e:
             # Catching BaseException is broad, but Polars can panic on
-            # header-only files in a way that isn't caught by a standard Exception.
+            # header-only files in a way that isn't caught by a standard
+            # Exception.
             logger.warning(
-                f"Could not collect deduplication results, likely due to empty/invalid file. Error: {e}"
+                "Could not collect deduplication results, likely due to "
+                f"empty/invalid file. Error: {e}"
             )
             return set()
 
@@ -145,9 +146,7 @@ def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
 
     except (pl.exceptions.ColumnNotFoundError, pl.exceptions.SchemaError) as e:
         logger.error(f"Deduplication failed due to missing or mismatched columns: {e}")
-        raise ValueError(
-            "Deduplication failed due to missing or mismatched columns."
-        ) from e
+        raise ValueError("Deduplication failed due to missing or mismatched columns.") from e
     except Exception as e:
         logger.error(f"An unexpected error occurred during Polars deduplication: {e}")
         raise

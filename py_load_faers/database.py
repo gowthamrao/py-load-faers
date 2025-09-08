@@ -63,14 +63,17 @@ class AbstractDatabaseLoader(ABC):
 
     @abstractmethod
     def handle_delta_merge(
-        self, caseids_to_upsert: List[str], data_sources: Dict[str, Path]
+        self,
+        caseids_to_upsert: List[str],
+        data_sources: Dict[str, Path],
     ) -> None:
         """
         Merge new data from staged files into the final tables for a delta load.
 
         This involves deleting old versions of cases and bulk-loading new versions.
         :param caseids_to_upsert: A list of case IDs that will be updated or inserted.
-        :param data_sources: A dictionary mapping table names to their source file paths.
+        :param data_sources: A dictionary mapping table names to their source
+            file paths.
         """
         raise NotImplementedError
 
