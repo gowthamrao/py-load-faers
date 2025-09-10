@@ -1,0 +1,5 @@
+primaryid$drug_seq$drugname$role_cod
+10101$1$ASPIRIN$PS
+10101$2$LISINOPRIL$SS
+10201$1$TYLENOL$PS
+10301$1$IBUPROFEN$PS

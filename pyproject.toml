@@ -1,0 +1,51 @@
+[tool.poetry]
+name = "py-load-faers"
+version = "1.0.0"
+description = "A Python package for high-performance ETL of FAERS data."
+authors = ["Gowtham Rao <rao@ohdsi.org>"]
+license = "Apache-2.0"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pydantic = "^2.4"
+pydantic-settings = "^2.0"
+pyyaml = "^6.0"
+requests = "^2.31"
+beautifulsoup4 = "^4.12"
+tqdm = "^4.66"
+psycopg = {version = "^3.1", extras = ["binary"]}
+typer = {version = "^0.9.0", extras = ["all"]}
+pandas = "^2.1"
+lxml = "^5.1.0"
+polars = "^0.20.0"
+pyarrow = "^15.0.0"
+
+[tool.poetry.scripts]
+faers-loader = "py_load_faers.cli:app"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4"
+black = "^23.9"
+ruff = "^0.0.292"
+mypy = "^1.5"
+pytest-mock = "^3.12"
+testcontainers = {version = "^3.7", extras = ["postgres"]}
+sqlalchemy = "^2.0"
+psycopg2-binary = "^2.9.9"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests",
+]
+
+[tool.black]
+line-length = 99
+
+[tool.ruff]
+line-length = 99
