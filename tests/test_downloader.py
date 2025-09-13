@@ -2,10 +2,12 @@
 """
 Tests for the downloader module.
 """
+import io
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
-import io
+
+from pytest_mock import MockerFixture
 
 from py_load_faers import downloader
 from py_load_faers.config import DownloaderSettings
@@ -23,7 +25,7 @@ SAMPLE_HTML = """
 """
 
 
-def test_find_latest_quarter(mocker):
+def test_find_latest_quarter(mocker: MockerFixture) -> None:
     """Test that the latest quarter is correctly parsed from the FDA website HTML."""
     # Mock the requests.get call
     mock_response = MagicMock()
@@ -35,7 +37,7 @@ def test_find_latest_quarter(mocker):
     assert latest_quarter == "2025q1"
 
 
-def test_find_latest_quarter_no_links(mocker):
+def test_find_latest_quarter_no_links(mocker: MockerFixture) -> None:
     """Test behavior when no download links are found on the page."""
     mock_response = MagicMock()
     mock_response.content = b"<html><body>No links here.</body></html>"
@@ -44,7 +46,7 @@ def test_find_latest_quarter_no_links(mocker):
     assert downloader.find_latest_quarter() is None
 
 
-def test_download_quarter(mocker, tmp_path: Path):
+def test_download_quarter(mocker: MockerFixture, tmp_path: Path) -> None:
     """Test the download, verification, and checksum calculation of a quarter file."""
     # Create a valid in-memory zip file for the mock download
     zip_buffer = io.BytesIO()
@@ -59,7 +61,7 @@ def test_download_quarter(mocker, tmp_path: Path):
     mock_response.iter_content.return_value = [zip_content]
     mocker.patch("requests.Session.get", return_value=mock_response)
 
-    settings = DownloaderSettings(download_dir=str(tmp_path))
+    settings = DownloaderSettings(download_dir=str(tmp_path), retries=3, timeout=60)
     quarter_to_download = "2025q1"
 
     result = downloader.download_quarter(quarter_to_download, settings)
@@ -76,14 +78,14 @@ def test_download_quarter(mocker, tmp_path: Path):
     assert all(c in "0123456789abcdef" for c in result_checksum)
 
 
-def test_download_quarter_corrupted_file(mocker, tmp_path: Path):
+def test_download_quarter_corrupted_file(mocker: MockerFixture, tmp_path: Path) -> None:
     """Test that a corrupted downloaded file is deleted."""
     mocker.patch("requests.Session.get")
 
     # Mock testzip to indicate a corrupted file
     mocker.patch("zipfile.ZipFile.testzip", return_value="file_is_bad.txt")
 
-    settings = DownloaderSettings(download_dir=str(tmp_path))
+    settings = DownloaderSettings(download_dir=str(tmp_path), retries=3, timeout=60)
     quarter = "2025q1"
 
     # Create a dummy file to be "downloaded"

@@ -12,7 +12,7 @@ PRIMARYID$CASEID$CASEVERSION$I_F_CODE$EVENT_DT$MFR_DT
 """
 
 
-def test_parse_ascii_file(tmp_path: Path):
+def test_parse_ascii_file(tmp_path: Path) -> None:
     """Test that a standard FAERS ASCII file is parsed correctly."""
     data_file = tmp_path / "DEMO25Q1.txt"
     data_file.write_text(SAMPLE_DEMO_DATA)
@@ -36,7 +36,7 @@ def test_parse_ascii_file(tmp_path: Path):
     assert records[1]["caseid"] == "98765"
 
 
-def test_parse_empty_file(tmp_path: Path):
+def test_parse_empty_file(tmp_path: Path) -> None:
     """Test that parsing an empty file yields no records."""
     data_file = tmp_path / "EMPTY.txt"
     data_file.write_text("")
@@ -45,7 +45,7 @@ def test_parse_empty_file(tmp_path: Path):
     assert len(records) == 0
 
 
-def test_parse_ascii_quarter():
+def test_parse_ascii_quarter() -> None:
     """
     Tests the main ASCII parsing logic which reads a directory of ASCII files,
     handles deletions, and structures the data correctly.
@@ -105,7 +105,7 @@ def test_parse_ascii_quarter():
     assert {"primaryid": "10301", "caseid": "103", "pt": "DIZZINESS"} in case_103["reac"]
 
 
-def test_parse_header_only_file(tmp_path: Path):
+def test_parse_header_only_file(tmp_path: Path) -> None:
     """Test that a file with only a header yields no records."""
     data_file = tmp_path / "HEADER.txt"
     data_file.write_text("PRIMARYID$CASEID")

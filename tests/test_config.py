@@ -5,6 +5,7 @@ Tests for the configuration module.
 import os
 from pathlib import Path
 import pytest
+from pytest import MonkeyPatch
 from py_load_faers.config import load_config, AppSettings
 
 # A sample config file for testing
@@ -38,7 +39,7 @@ def sample_config_file(tmp_path: Path) -> Path:
     return config_path
 
 
-def test_load_config_from_file_and_profile(sample_config_file: Path):
+def test_load_config_from_file_and_profile(sample_config_file: Path) -> None:
     """Test that configuration is loaded correctly from a specific profile in the YAML file."""
     settings = load_config(profile="prod", config_file=str(sample_config_file))
 
@@ -51,7 +52,9 @@ def test_load_config_from_file_and_profile(sample_config_file: Path):
     assert settings.log_level == "INFO"
 
 
-def test_load_config_with_env_var_override(sample_config_file: Path, monkeypatch):
+def test_load_config_with_env_var_override(
+    sample_config_file: Path, monkeypatch: MonkeyPatch
+) -> None:
     """Test that environment variables override settings from the config file."""
     # Set environment variables to override the 'dev' profile
     monkeypatch.setenv("PY_LOAD_FAERS_DB__HOST", "env_host")
@@ -66,7 +69,7 @@ def test_load_config_with_env_var_override(sample_config_file: Path, monkeypatch
     assert settings.log_level == "WARNING"
 
 
-def test_load_config_defaults_when_no_file():
+def test_load_config_defaults_when_no_file() -> None:
     """Test that default settings are used when no config file is present."""
     # Assuming no config.yaml exists in the root of the test execution dir
     if os.path.exists("config.yaml"):

@@ -9,16 +9,18 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Generator, Set
+from typing import Any, Dict, Generator, Iterator, List, Optional, Set, Tuple, Type, cast
+
+import polars as pl
+from pydantic import BaseModel
 
 from .config import AppSettings
 from .database import AbstractDatabaseLoader
 from .downloader import download_quarter, find_latest_quarter
 from .models import FAERS_TABLE_MODELS
-from .parser import parse_xml_file, parse_ascii_quarter
+from .parser import parse_ascii_quarter, parse_xml_file
 from .processing import deduplicate_polars
 from .staging import stage_data, extract_zip_archive
-import polars as pl
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,9 @@ class FaersLoaderEngine:
         self.config = config
         self.db_loader = db_loader
 
-    def run_load(self, mode: str = "delta", quarter: Optional[str] = None):
+    def run_load(
+        self, mode: str = "delta", quarter: Optional[str] = None
+    ) -> Optional[Tuple[bool, str]]:
         """Runs the full ETL process."""
         logger.info(f"Starting FAERS load in '{mode}' mode.")
         self.db_loader.begin_transaction()
@@ -63,29 +67,29 @@ class FaersLoaderEngine:
                 if not latest_available:
                     logger.warning("Could not determine the latest available quarter. Aborting.")
                     self.db_loader.commit()
-                    return
+                    return None
 
                 if last_loaded and last_loaded.lower() >= latest_available.lower():
                     logger.info("Database is already up-to-date. No new quarters to load.")
                     self.db_loader.commit()
-                    return
+                    return None
 
-                start_quarter = None
+                start_qtr: Optional[str] = None
                 if last_loaded:
                     year, q = int(last_loaded[:4]), int(last_loaded[-1])
                     q += 1
                     if q > 4:
                         q = 1
                         year += 1
-                    start_quarter = f"{year}q{q}"
+                    start_qtr = f"{year}q{q}"
                 else:
                     logger.info(
                         "No previous successful load found. Assuming this is "
                         "the first run in a delta sequence."
                     )
-                    start_quarter = latest_available
+                    start_qtr = latest_available
 
-                quarters_to_load = _generate_quarters_to_load(start_quarter, latest_available)
+                quarters_to_load = _generate_quarters_to_load(start_qtr, latest_available)
                 for q_to_load in quarters_to_load:
                     self._process_quarter(q_to_load, "DELTA")
             else:
@@ -106,8 +110,9 @@ class FaersLoaderEngine:
                 self.db_loader.rollback()
                 logger.error("Transaction has been rolled back.")
             raise
+        return None
 
-    def _process_quarter(self, quarter: str, load_type: str):
+    def _process_quarter(self, quarter: str, load_type: str) -> None:
         """
         Downloads, processes, and loads data for a single FAERS quarter using a unified,
         scalable pipeline that supports multiple formats.
@@ -117,7 +122,7 @@ class FaersLoaderEngine:
         start_time = datetime.now(timezone.utc)
 
         # Initialize metadata with all required fields to prevent SQL errors
-        metadata = {
+        metadata: Dict[str, Any] = {
             "load_id": load_id,
             "quarter": quarter,
             "load_type": load_type,
@@ -147,7 +152,7 @@ class FaersLoaderEngine:
             record_iterator, nullified_ids = self._parse_quarter_zip(zip_path, staging_dir)
             staged_chunk_files = stage_data(
                 record_iterator,
-                FAERS_TABLE_MODELS,
+                cast(Dict[str, Type[BaseModel]], FAERS_TABLE_MODELS),
                 self.config.processing,
                 staging_dir,
             )
@@ -201,7 +206,7 @@ class FaersLoaderEngine:
 
     def _parse_quarter_zip(
         self, zip_path: Path, extract_dir: Path
-    ) -> (Generator[Dict[str, Any], None, None], Set[str]):
+    ) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
         """Detects format and parses a FAERS zip archive."""
         with zipfile.ZipFile(zip_path, "r") as zf:
             filenames = zf.namelist()
@@ -209,9 +214,9 @@ class FaersLoaderEngine:
                 logger.info("Detected XML format.")
                 xml_filename = next(f for f in filenames if f.lower().endswith(".xml"))
                 with zf.open(xml_filename) as xml_stream:
-                    # Consume the generator and return a list to avoid issues with closed streams
-                    records, nullified_ids = parse_xml_file(xml_stream)
-                    return list(records), nullified_ids
+                    record_iterator, nullified_ids = parse_xml_file(xml_stream)
+                    # Consume the generator into a list while the stream is open
+                    return iter(list(record_iterator)), nullified_ids
             else:
                 logger.info("Detected ASCII format.")
                 extract_zip_archive(zip_path, extract_dir)
@@ -240,7 +245,7 @@ class FaersLoaderEngine:
         logger.info(
             f"Filtering staged files to keep {len(primaryids_to_keep)} records using Polars."
         )
-        final_files = {}
+        final_files: Dict[str, Path] = {}
         if not staged_files or not primaryids_to_keep:
             return final_files
 
@@ -298,10 +303,14 @@ class FaersLoaderEngine:
                 logger.warning(f"No records left for table {table_name} after filtering.")
                 # Create an empty file with headers so downstream steps don't fail
                 if format == "csv":
-                    model_headers = [
-                        f.lower() for f in FAERS_TABLE_MODELS[table_name].model_fields.keys()
-                    ]
-                    with open(final_path, "w") as f:
-                        f.write("$".join(model_headers))
+                    model_type = cast(
+                        Optional[Type[BaseModel]], FAERS_TABLE_MODELS.get(table_name)
+                    )
+                    if model_type:
+                        model_headers = [
+                            f.lower() for f in model_type.model_fields.keys()
+                        ]
+                        with open(final_path, "w") as f:
+                            f.write("$".join(model_headers))
 
         return final_files

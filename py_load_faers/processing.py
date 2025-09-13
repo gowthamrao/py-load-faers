@@ -7,7 +7,7 @@ import logging
 import re
 import zipfile
 from pathlib import Path
-from typing import Set, List
+from typing import Any, Dict, List, Set
 
 import polars as pl
 
@@ -160,7 +160,7 @@ def deduplicate_polars(
         raise
 
 
-def clean_drug_names(records: List[dict]) -> List[dict]:
+def clean_drug_names(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Cleans drug names in a list of records.
 

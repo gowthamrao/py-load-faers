@@ -5,9 +5,10 @@ This module provides functions for parsing FAERS data files.
 import csv
 import logging
 from pathlib import Path
-from typing import IO, Iterator, Dict, Any, Tuple, Set
+from typing import IO, Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import polars as pl
+from lxml import etree
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +38,20 @@ def parse_ascii_quarter(
         if name != "demo" and df is not None and not df.is_empty():
             faers_data[name] = df.filter(pl.col("primaryid").is_in(primaryids_to_keep))
 
-    def record_generator():
+    def record_generator() -> Iterator[Dict[str, Any]]:
         # Iterate over each valid demo record (one per case version)
         for demo_row in df_demo.to_dicts():
             primary_id = demo_row["primaryid"]
             case_id = demo_row["caseid"]
 
-            report = {"demo": [demo_row]}
+            report: Dict[str, Any] = {"demo": [demo_row]}
 
             # For each sub-table, filter its dataframe for the current primaryid
             for table_name, df_table in faers_data.items():
                 if table_name == "demo":
                     continue
 
-                table_records = []
+                table_records: List[Dict[str, Any]] = []
                 if df_table is not None and not df_table.is_empty():
                     # Filter the already-reduced table for the specific primary_id
                     records = df_table.filter(pl.col("primaryid") == primary_id).to_dicts()
@@ -132,7 +133,7 @@ def _load_ascii_tables_to_polars(
     return dataframes
 
 
-def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
+def parse_xml_file(xml_stream: IO[Any]) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
     """
     Parses a FAERS XML data file from a stream using a memory-efficient
     approach.
@@ -141,17 +142,16 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
     :return: A tuple containing an iterator for safety reports and a set of
         nullified case IDs.
     """
-    from lxml import etree
-    from typing import Set
-
     logger.info("Parsing XML stream with full table extraction.")
     nullified_case_ids: Set[str] = set()
 
-    def element_text(elem, path, default=None):
+    def element_text(
+        elem: etree._Element, path: str, default: Optional[str] = None
+    ) -> Optional[str]:
         node = elem.find(path)
         return node.text if node is not None and node.text is not None else default
 
-    def record_generator():
+    def record_generator() -> Iterator[Dict[str, Any]]:
         try:
             context = etree.iterparse(xml_stream, events=("end",), tag="safetyreport")
             for event, elem in context:
@@ -171,7 +171,7 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                     elem.clear()
                     continue
 
-                report_records = {
+                report_records: Dict[str, List[Dict[str, Any]]] = {
                     "demo": [],
                     "drug": [],
                     "reac": [],
@@ -183,18 +183,21 @@ def parse_xml_file(xml_stream: IO) -> Tuple[Iterator[Dict[str, Any]], Set[str]]:
                 patient = elem.find("patient")
                 summary = elem.find("summary")
 
-                report_records["demo"].append(
-                    {
-                        "primaryid": primary_id,
-                        "caseid": case_id,
-                        "fda_dt": element_text(elem, "receiptdate"),
-                        "sex": element_text(patient, "patientsex"),
-                        "age": element_text(patient, "patientonsetage"),
-                        "age_cod": element_text(patient, "patientonsetageunit"),
-                        "reporter_country": element_text(elem, "primarysource/reportercountry"),
-                        "occr_country": element_text(elem, "occurcountry"),
-                    }
-                )
+                if patient is not None:
+                    report_records["demo"].append(
+                        {
+                            "primaryid": primary_id,
+                            "caseid": case_id,
+                            "fda_dt": element_text(elem, "receiptdate"),
+                            "sex": element_text(patient, "patientsex"),
+                            "age": element_text(patient, "patientonsetage"),
+                            "age_cod": element_text(patient, "patientonsetageunit"),
+                            "reporter_country": element_text(
+                                elem, "primarysource/reportercountry"
+                            ),
+                            "occr_country": element_text(elem, "occurcountry"),
+                        }
+                    )
 
                 primary_source = elem.find("primarysource")
                 if primary_source is not None:

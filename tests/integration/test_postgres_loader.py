@@ -2,18 +2,20 @@
 """
 Integration tests for the PostgresLoader.
 """
-import pytest
-from testcontainers.postgres import PostgresContainer
-
-from py_load_faers.config import DatabaseSettings
-from py_load_faers_postgres.loader import PostgresLoader
-from py_load_faers.models import FAERS_TABLE_MODELS
-
 import zipfile
 from pathlib import Path
+from typing import Iterator
+
+import pytest
+from psycopg.rows import dict_row
+from pytest_mock import MockerFixture
+from testcontainers.postgres import PostgresContainer
 from typer.testing import CliRunner
 
 from py_load_faers.cli import app
+from py_load_faers.config import DatabaseSettings
+from py_load_faers.models import FAERS_TABLE_MODELS
+from py_load_faers_postgres.loader import PostgresLoader
 
 # Mark all tests in this module as 'integration'
 pytestmark = pytest.mark.integration
@@ -31,7 +33,7 @@ SAMPLE_DRUG_DATA = """primaryid$caseid$drug_seq$drugname
 
 
 @pytest.fixture(scope="module")
-def postgres_container():
+def postgres_container() -> Iterator[PostgresContainer]:
     """Fixture to start and stop a PostgreSQL container for the test module."""
     with PostgresContainer("postgres:13") as container:
         yield container
@@ -47,13 +49,16 @@ def sample_faers_zip(tmp_path: Path) -> Path:
     return zip_path
 
 
-def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer):
+def test_postgres_loader_initialize_schema(
+    postgres_container: PostgresContainer,
+) -> None:
     """
     Test that the PostgresLoader can connect to a database and correctly
     initialize the FAERS schema.
     """
     # Get connection details from the container
     db_settings = DatabaseSettings(
+        type="postgresql",
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
         user="test",
@@ -65,6 +70,7 @@ def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer
 
     # Connect and initialize the schema
     loader.connect()
+    assert loader.conn is not None
     loader.initialize_schema(FAERS_TABLE_MODELS)
 
     # Verify that the tables were created
@@ -79,7 +85,7 @@ def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer
         "_faers_load_history",
     }
 
-    with loader.conn.cursor() as cur:
+    with loader.conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             SELECT table_name
@@ -106,8 +112,10 @@ def test_postgres_loader_initialize_schema(postgres_container: PostgresContainer
 
 
 def test_run_command_end_to_end(
-    postgres_container: PostgresContainer, sample_faers_zip: Path, mocker
-):
+    postgres_container: PostgresContainer,
+    sample_faers_zip: Path,
+    mocker: MockerFixture,
+) -> None:
     """
     Test the full end-to-end 'run' command, from download to database load.
     """
@@ -119,6 +127,7 @@ def test_run_command_end_to_end(
 
     # Get DB settings from the container
     db_settings = DatabaseSettings(
+        type="postgresql",
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
         user="test",
@@ -149,18 +158,28 @@ def test_run_command_end_to_end(
     # 3. Verify the data was loaded correctly
     loader = PostgresLoader(db_settings)
     loader.connect()
-    with loader.conn.cursor() as cur:
+    assert loader.conn is not None
+
+    with loader.conn.cursor(row_factory=dict_row) as cur:
         # Check demo table
         cur.execute("SELECT COUNT(*) FROM demo")
-        assert cur.fetchone()["count"] == 2
+        count_res = cur.fetchone()
+        assert count_res is not None
+        assert count_res["count"] == 2
         cur.execute("SELECT caseid FROM demo WHERE primaryid = '1001'")
-        assert cur.fetchone()["caseid"] == "1"
+        case_res = cur.fetchone()
+        assert case_res is not None
+        assert case_res["caseid"] == "1"
 
         # Check drug table
         cur.execute("SELECT COUNT(*) FROM drug")
-        assert cur.fetchone()["count"] == 3
+        count_res = cur.fetchone()
+        assert count_res is not None
+        assert count_res["count"] == 3
         cur.execute("SELECT drugname FROM drug WHERE primaryid = '1002'")
-        assert cur.fetchone()["drugname"] == "METFORMIN"
+        drug_res = cur.fetchone()
+        assert drug_res is not None
+        assert drug_res["drugname"] == "METFORMIN"
     loader.conn.close()
 
 
@@ -175,14 +194,15 @@ def realistic_faers_zip(tmp_path: Path) -> Path:
 
 
 def test_data_quality_check_passes_and_fails(
-    postgres_container: PostgresContainer, realistic_faers_zip: Path, mocker
-):
+    postgres_container: PostgresContainer,
+    realistic_faers_zip: Path,
+    mocker: MockerFixture,
+) -> None:
     """
     Tests the data quality check command.
     1. Loads good data and asserts the check passes.
     2. Injects a duplicate and asserts the check fails.
     """
-
     mocker.patch(
         "py_load_faers.engine.download_quarter",
         return_value=(realistic_faers_zip, "dummy"),
@@ -190,6 +210,7 @@ def test_data_quality_check_passes_and_fails(
     mocker.patch("py_load_faers.engine.find_latest_quarter", return_value="2025q2")
 
     db_settings = DatabaseSettings(
+        type="postgresql",
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
         user="test",
@@ -221,10 +242,13 @@ def test_data_quality_check_passes_and_fails(
     # 3. Inject a duplicate record to make the check fail
     loader = PostgresLoader(db_settings)
     loader.connect()
-    with loader.conn.cursor() as cur:
+    assert loader.conn is not None
+
+    with loader.conn.cursor(row_factory=dict_row) as cur:
         # Get an existing record
         cur.execute("SELECT * FROM demo LIMIT 1;")
         record_to_duplicate = cur.fetchone()
+        assert record_to_duplicate is not None
         # Insert it with a new primaryid but the same caseid
         cur.execute(
             "INSERT INTO demo (primaryid, caseid, fda_dt) VALUES (%s, %s, %s);",
