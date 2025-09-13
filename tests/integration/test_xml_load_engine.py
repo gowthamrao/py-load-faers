@@ -99,15 +99,11 @@ def test_full_xml_load_with_deduplication_and_nullification(
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '101'")
         count_res = cur.fetchone()
         assert count_res is not None
-        assert (
-            count_res["count"] == 0
-        ), "Case 101 should have been deleted due to nullification"
+        assert count_res["count"] == 0, "Case 101 should have been deleted due to nullification"
         cur.execute("SELECT COUNT(*) FROM drug WHERE primaryid IN ('V1', 'V2', 'V3')")
         count_res = cur.fetchone()
         assert count_res is not None
-        assert (
-            count_res["count"] == 0
-        ), "No data from any version of Case 101 should be loaded"
+        assert count_res["count"] == 0, "No data from any version of Case 101 should be loaded"
 
         # 3. Verify the load history metadata
         cur.execute("SELECT * FROM _faers_load_history")
