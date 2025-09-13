@@ -103,9 +103,7 @@ def test_full_xml_load_via_parquet_staging(
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '101'")
         count_res = cur.fetchone()
         assert count_res is not None
-        assert (
-            count_res["count"] == 0
-        ), "Case 101 should have been deleted due to nullification"
+        assert count_res["count"] == 0, "Case 101 should have been deleted due to nullification"
 
         # 3. Verify data in a child table
         cur.execute("SELECT * FROM drug WHERE primaryid = 'V4'")

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Iterator, List
+from typing import Dict, Iterator, List
 
-import psycopg
 import pytest
 from psycopg.rows import dict_row
 from pytest_mock import MockerFixture
@@ -43,9 +42,7 @@ def app_settings(tmp_path: Path, db_settings: DatabaseSettings) -> AppSettings:
     """Provides application settings for the test."""
     return AppSettings(
         db=db_settings,
-        downloader=DownloaderSettings(
-            download_dir=str(tmp_path), retries=3, timeout=60
-        ),
+        downloader=DownloaderSettings(download_dir=str(tmp_path), retries=3, timeout=60),
     )
 
 
@@ -100,9 +97,7 @@ def mock_faers_data(tmp_path: Path) -> Path:
         "drug": ("primaryid$drug_seq$drugname\n" "2002$1$Ibuprofen PM\n" "1004$1$Advil"),
     }
     # Case 103 will be deleted via this deletion file
-    create_mock_zip(
-        tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"]
-    )
+    create_mock_zip(tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"])
 
     return tmp_path
 
