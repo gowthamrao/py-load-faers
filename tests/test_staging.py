@@ -4,8 +4,8 @@ Tests for the staging module.
 """
 import zipfile
 from pathlib import Path
-import tempfile
 from py_load_faers.staging import extract_zip_archive
+
 
 def test_extract_zip_archive(tmp_path: Path):
     """

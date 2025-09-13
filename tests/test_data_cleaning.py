@@ -4,6 +4,7 @@ Tests for the data cleaning functions.
 """
 from py_load_faers.processing import clean_drug_names
 
+
 def test_trim_whitespace_from_drug_name():
     """Test that leading/trailing whitespace is trimmed from drug names."""
     sample_records = [
@@ -16,6 +17,7 @@ def test_trim_whitespace_from_drug_name():
     assert cleaned_records[1]["drugname"] == "IBUPROFEN"
     assert cleaned_records[2]["drugname"] == "PARACETAMOL"
 
+
 def test_convert_drug_name_to_uppercase():
     """Test that drug names are converted to uppercase."""
     sample_records = [
@@ -25,6 +27,7 @@ def test_convert_drug_name_to_uppercase():
     cleaned_records = clean_drug_names(sample_records)
     assert cleaned_records[0]["drugname"] == "ASPIRIN"
     assert cleaned_records[1]["drugname"] == "IBUPROFEN"
+
 
 def test_handle_null_string_in_drug_name():
     """Test that 'NULL' strings are handled correctly."""
@@ -37,6 +40,7 @@ def test_handle_null_string_in_drug_name():
     assert cleaned_records[0]["drugname"] == ""
     assert cleaned_records[1]["drugname"] == ""
     assert cleaned_records[2]["drugname"] == "ASPIRIN"
+
 
 def test_remove_special_characters_from_drug_name():
     """Test that special characters are removed from drug names."""
