@@ -1,18 +1,25 @@
 # -*- coding: utf-8 -*-
-import pytest
 import zipfile
 from pathlib import Path
+from typing import Iterator
+
 import psycopg
-from testcontainers.postgres import PostgresContainer
-from py_load_faers.config import AppSettings, DatabaseSettings, DownloaderSettings
+import pytest
+from py_load_faers.config import (
+    AppSettings,
+    DatabaseSettings,
+    DownloaderSettings,
+)
 from py_load_faers.engine import FaersLoaderEngine
 from py_load_faers_postgres.loader import PostgresLoader
+from pytest_mock import MockerFixture
+from testcontainers.postgres import PostgresContainer
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
-def postgres_container():
+def postgres_container() -> Iterator[PostgresContainer]:
     with PostgresContainer("postgres:13") as container:
         yield container
 
@@ -20,6 +27,7 @@ def postgres_container():
 @pytest.fixture(scope="module")
 def db_settings(postgres_container: PostgresContainer) -> DatabaseSettings:
     return DatabaseSettings(
+        type="postgresql",
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
         user=postgres_container.POSTGRES_USER,
@@ -42,8 +50,8 @@ def realistic_xml_zip(tmp_path: Path) -> Path:
 
 
 def test_full_xml_load_with_deduplication_and_nullification(
-    db_settings: DatabaseSettings, realistic_xml_zip: Path, mocker
-):
+    db_settings: DatabaseSettings, realistic_xml_zip: Path, mocker: MockerFixture
+) -> None:
     """
     This integration test verifies the end-to-end XML loading process,
     specifically checking that the deduplication and nullification logic
@@ -59,11 +67,15 @@ def test_full_xml_load_with_deduplication_and_nullification(
 
     config = AppSettings(
         db=db_settings,
-        downloader=DownloaderSettings(download_dir=str(realistic_xml_zip.parent)),
+        downloader=DownloaderSettings(
+            download_dir=str(realistic_xml_zip.parent), retries=3, timeout=60
+        ),
     )
 
     db_loader = PostgresLoader(config.db)
     db_loader.connect()
+    assert db_loader.conn is not None
+
     # Pass the schema definition as required by the updated signature
     db_loader.initialize_schema(FAERS_TABLE_MODELS)
     db_loader.commit()
@@ -85,12 +97,16 @@ def test_full_xml_load_with_deduplication_and_nullification(
 
         # 2. Verify that case 101 is completely gone
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '101'")
+        count_res = cur.fetchone()
+        assert count_res is not None
         assert (
-            cur.fetchone()["count"] == 0
+            count_res["count"] == 0
         ), "Case 101 should have been deleted due to nullification"
         cur.execute("SELECT COUNT(*) FROM drug WHERE primaryid IN ('V1', 'V2', 'V3')")
+        count_res = cur.fetchone()
+        assert count_res is not None
         assert (
-            cur.fetchone()["count"] == 0
+            count_res["count"] == 0
         ), "No data from any version of Case 101 should be loaded"
 
         # 3. Verify the load history metadata

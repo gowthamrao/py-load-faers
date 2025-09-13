@@ -5,13 +5,14 @@ Tests for the data processing module.
 import csv
 import zipfile
 from pathlib import Path
+from typing import Any, Callable, Dict, List
 
 import pytest
 
-from py_load_faers.processing import get_caseids_to_delete, deduplicate_polars
+from py_load_faers.processing import deduplicate_polars, get_caseids_to_delete
 
 
-def test_get_caseids_to_delete_found(tmp_path: Path):
+def test_get_caseids_to_delete_found(tmp_path: Path) -> None:
     """
     Test that get_caseids_to_delete correctly finds and parses a deletion file.
     """
@@ -28,7 +29,7 @@ def test_get_caseids_to_delete_found(tmp_path: Path):
     assert result == set(case_ids_to_delete)
 
 
-def test_get_caseids_to_delete_not_found(tmp_path: Path):
+def test_get_caseids_to_delete_not_found(tmp_path: Path) -> None:
     """
     Test that get_caseids_to_delete returns an empty set when no deletion file exists.
     """
@@ -40,10 +41,12 @@ def test_get_caseids_to_delete_not_found(tmp_path: Path):
 
 
 @pytest.fixture
-def create_demo_csv(tmp_path: Path):
+def create_demo_csv(
+    tmp_path: Path,
+) -> Callable[[List[Dict[str, Any]], str], Path]:
     """A pytest fixture to create a sample DEMO csv file for testing."""
 
-    def _create_csv(records, filename="test_demo.csv"):
+    def _create_csv(records: List[Dict[str, Any]], filename: str = "test_demo.csv") -> Path:
         csv_path = tmp_path / filename
         # Use a minimal set of headers for simplicity
         min_headers = ["primaryid", "caseid", "fda_dt"]
@@ -58,7 +61,9 @@ def create_demo_csv(tmp_path: Path):
     return _create_csv
 
 
-def test_deduplicate_polars_basic(create_demo_csv):
+def test_deduplicate_polars_basic(
+    create_demo_csv: Callable[[List[Dict[str, Any]], str], Path]
+) -> None:
     """Test the core logic: latest fda_dt wins."""
     records = [
         {"caseid": "1", "primaryid": "101", "fda_dt": "20240101"},
@@ -67,12 +72,14 @@ def test_deduplicate_polars_basic(create_demo_csv):
     ]
     expected_ids = {"102", "201"}
 
-    demo_file = create_demo_csv(records)
+    demo_file = create_demo_csv(records, "test_deduplicate_polars_basic.csv")
     result = deduplicate_polars([demo_file], "csv")
     assert result == expected_ids
 
 
-def test_deduplicate_polars_tiebreaker(create_demo_csv):
+def test_deduplicate_polars_tiebreaker(
+    create_demo_csv: Callable[[List[Dict[str, Any]], str], Path]
+) -> None:
     """Test the tie-breaking logic: when fda_dt is the same, latest primaryid wins."""
     records = [
         {"caseid": "3", "primaryid": "301", "fda_dt": "20240401"},
@@ -80,12 +87,14 @@ def test_deduplicate_polars_tiebreaker(create_demo_csv):
     ]
     expected_ids = {"302"}
 
-    demo_file = create_demo_csv(records)
+    demo_file = create_demo_csv(records, "test_deduplicate_polars_tiebreaker.csv")
     result = deduplicate_polars([demo_file], "csv")
     assert result == expected_ids
 
 
-def test_deduplicate_polars_complex_mix(create_demo_csv):
+def test_deduplicate_polars_complex_mix(
+    create_demo_csv: Callable[[List[Dict[str, Any]], str], Path]
+) -> None:
     """Test a complex mix of scenarios."""
     records = [
         # This order is intentionally mixed up to ensure sorting works correctly
@@ -97,12 +106,14 @@ def test_deduplicate_polars_complex_mix(create_demo_csv):
     ]
     expected_ids = {"102", "201", "302"}
 
-    demo_file = create_demo_csv(records)
+    demo_file = create_demo_csv(records, "test_deduplicate_polars_complex_mix.csv")
     result = deduplicate_polars([demo_file], "csv")
     assert result == expected_ids
 
 
-def test_deduplicate_polars_multiple_files(create_demo_csv):
+def test_deduplicate_polars_multiple_files(
+    create_demo_csv: Callable[[List[Dict[str, Any]], str], Path]
+) -> None:
     """Test that deduplication works correctly across multiple source files."""
     records1 = [
         {"caseid": "1", "primaryid": "101", "fda_dt": "20240101"},
@@ -121,18 +132,20 @@ def test_deduplicate_polars_multiple_files(create_demo_csv):
     assert result == expected_ids
 
 
-def test_deduplicate_polars_empty_input():
+def test_deduplicate_polars_empty_input() -> None:
     """Test that the function handles an empty list of files."""
     assert deduplicate_polars([], "csv") == set()
 
 
-def test_deduplicate_polars_empty_file(create_demo_csv):
+def test_deduplicate_polars_empty_file(
+    create_demo_csv: Callable[[List[Dict[str, Any]], str], Path]
+) -> None:
     """Test that the function handles a file that is empty or has only a header."""
-    demo_file = create_demo_csv([])
+    demo_file = create_demo_csv([], "test_deduplicate_polars_empty_file.csv")
     assert deduplicate_polars([demo_file], "csv") == set()
 
 
-def test_deduplicate_polars_missing_column(tmp_path: Path):
+def test_deduplicate_polars_missing_column(tmp_path: Path) -> None:
     """Test that the function raises an error if a required column is missing."""
     csv_path = tmp_path / "bad_data.csv"
     with open(csv_path, "w", newline="") as f:

@@ -33,7 +33,7 @@ def download(
     profile: str = typer.Option(
         "dev", "--profile", "-p", help="The configuration profile to use."
     ),
-):
+) -> None:
     """Download FAERS quarterly data files."""
     settings = config.load_config(profile=profile)
 
@@ -72,7 +72,7 @@ def run(
     profile: str = typer.Option(
         "dev", "--profile", "-p", help="The configuration profile to use."
     ),
-):
+) -> None:
     """
     Run the FAERS ETL process.
 
@@ -94,8 +94,15 @@ def run(
     try:
         db_loader.connect()
         engine = FaersLoaderEngine(config=settings, db_loader=db_loader)
-        _, dq_message = engine.run_load(mode=mode, quarter=quarter)
-        typer.secho(f"ETL process completed. {dq_message}", fg=typer.colors.GREEN)
+        result = engine.run_load(mode=mode, quarter=quarter)
+        if result:
+            _, dq_message = result
+            typer.secho(f"ETL process completed. {dq_message}", fg=typer.colors.GREEN)
+        else:
+            typer.secho(
+                "ETL process finished with no new data to load or check.",
+                fg=typer.colors.YELLOW,
+            )
     except Exception as e:
         typer.secho(
             f"An error occurred during the ETL process: {e}", err=True, fg=typer.colors.RED
@@ -111,7 +118,7 @@ def db_init(
     profile: str = typer.Option(
         "dev", "--profile", "-p", help="The configuration profile to use."
     ),
-):
+) -> None:
     """Initialize the database schema."""
     settings = config.load_config(profile=profile)
 
@@ -143,16 +150,12 @@ def db_init(
             loader.conn.close()
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def db_verify(
     profile: str = typer.Option(
         "dev", "--profile", "-p", help="The configuration profile to use."
     ),
-):
+) -> None:
     """
     Run data quality checks on the existing database.
     Verifies the integrity of the loaded data, e.g., checking for duplicates.
@@ -185,3 +188,7 @@ def db_verify(
     finally:
         if loader.conn:
             loader.conn.close()
+
+
+if __name__ == "__main__":
+    app()
