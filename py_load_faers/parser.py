@@ -69,7 +69,11 @@ def parse_ascii_quarter(
 
 def _parse_deletion_file(quarter_dir: Path) -> Set[str]:
     """Finds and parses a FAERS deletion file, returning a set of CASEIDs."""
-    deletion_patterns = ["DELE*.[tT][xX][tT]", "DELETED_CASES_*.[tT][xX][tT]"]
+    deletion_patterns = [
+        "DELE*.[tT][xX][tT]",
+        "DELETED_CASES_*.[tT][xX][tT]",
+        "del_*.[tT][xX][tT]",
+    ]
     nullified_case_ids: Set[str] = set()
     for pattern in deletion_patterns:
         try:
