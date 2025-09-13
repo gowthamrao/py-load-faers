@@ -7,6 +7,8 @@ from testcontainers.postgres import PostgresContainer
 from py_load_faers.config import AppSettings, DatabaseSettings, DownloaderSettings
 from py_load_faers.engine import FaersLoaderEngine
 from py_load_faers_postgres.loader import PostgresLoader
+from typer.testing import CliRunner
+from py_load_faers.cli import app
 
 # Mark all tests in this file as integration tests
 pytestmark = pytest.mark.integration
@@ -84,20 +86,12 @@ def mock_faers_data(tmp_path):
             "2002$102$20240401\n"  # Updated case with new, higher primaryid
             "1004$104$20240401"  # New case
         ),
-        "drug": (
-            "primaryid$drug_seq$drugname\n" "2002$1$Ibuprofen PM\n" "1004$1$Advil"
-        ),
+        "drug": ("primaryid$drug_seq$drugname\n" "2002$1$Ibuprofen PM\n" "1004$1$Advil"),
     }
     # Case 103 will be deleted via this deletion file
-    create_mock_zip(
-        tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"]
-    )
+    create_mock_zip(tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"])
 
     return tmp_path
-
-
-from typer.testing import CliRunner
-from py_load_faers.cli import app
 
 
 def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocker):

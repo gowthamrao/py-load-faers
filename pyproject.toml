@@ -33,6 +33,11 @@ pytest-mock = "^3.12"
 testcontainers = {version = "^3.7", extras = ["postgres"]}
 sqlalchemy = "^2.0"
 psycopg2-binary = "^2.9.9"
+pytest-cov = "^7.0.0"
+types-pyyaml = "^6.0.12.20250822"
+types-requests = "^2.32.4.20250913"
+types-tqdm = "^4.67.0.20250809"
+lxml-stubs = "^0.5.1"
 
 
 [build-system]

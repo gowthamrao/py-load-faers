@@ -5,6 +5,7 @@ Tests for the downloader module.
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
+import io
 
 from py_load_faers import downloader
 from py_load_faers.config import DownloaderSettings
@@ -41,9 +42,6 @@ def test_find_latest_quarter_no_links(mocker):
     mocker.patch("requests.Session.get", return_value=mock_response)
 
     assert downloader.find_latest_quarter() is None
-
-
-import io
 
 
 def test_download_quarter(mocker, tmp_path: Path):

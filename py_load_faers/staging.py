@@ -16,8 +16,11 @@ from .config import ProcessingSettings
 logger = logging.getLogger(__name__)
 
 
+from typing import Iterable
+
+
 def stage_data(
-    record_iterator: Iterator[Dict[str, Any]],
+    record_iterator: Iterable[Dict[str, Any]],
     table_models: Dict[str, Type[BaseModel]],
     settings: ProcessingSettings,
     staging_dir: Optional[Path] = None,
@@ -45,7 +48,7 @@ def stage_data(
 
 
 def stage_data_to_parquet_files(
-    record_iterator: Iterator[Dict[str, Any]],
+    record_iterator: Iterable[Dict[str, Any]],
     table_models: Dict[str, Type[BaseModel]],
     chunk_size: int = 1_000_000,
     staging_dir: Optional[Path] = None,
@@ -127,7 +130,7 @@ def _flush_buffer_to_parquet(
 
 
 def stage_data_to_csv_files(
-    record_iterator: Iterator[Dict[str, Any]],
+    record_iterator: Iterable[Dict[str, Any]],
     table_models: Dict[str, Type[BaseModel]],
     chunk_size: int = 1_000_000,
     staging_dir: Optional[Path] = None,
