@@ -7,16 +7,13 @@ import logging
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Iterator, Dict, Any, Type, List, Optional
+from typing import Dict, Any, Type, List, Optional, Iterable
 from pydantic import BaseModel
 import polars as pl
 
 from .config import ProcessingSettings
 
 logger = logging.getLogger(__name__)
-
-
-from typing import Iterable
 
 
 def stage_data(
