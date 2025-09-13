@@ -7,7 +7,6 @@ import zipfile
 from pathlib import Path
 from typing import Iterator
 
-import psycopg
 import pytest
 from psycopg.rows import dict_row
 from pytest_mock import MockerFixture
@@ -47,9 +46,7 @@ def app_settings(tmp_path: Path, db_settings: DatabaseSettings) -> AppSettings:
     """Provides application settings for the test."""
     return AppSettings(
         db=db_settings,
-        downloader=DownloaderSettings(
-            download_dir=str(tmp_path), retries=3, timeout=60
-        ),
+        downloader=DownloaderSettings(download_dir=str(tmp_path), retries=3, timeout=60),
     )
 
 

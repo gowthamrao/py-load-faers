@@ -307,9 +307,7 @@ class FaersLoaderEngine:
                         Optional[Type[BaseModel]], FAERS_TABLE_MODELS.get(table_name)
                     )
                     if model_type:
-                        model_headers = [
-                            f.lower() for f in model_type.model_fields.keys()
-                        ]
+                        model_headers = [f.lower() for f in model_type.model_fields.keys()]
                         with open(final_path, "w") as f:
                             f.write("$".join(model_headers))
 
