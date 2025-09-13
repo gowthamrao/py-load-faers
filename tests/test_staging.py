@@ -7,7 +7,7 @@ from pathlib import Path
 from py_load_faers.staging import extract_zip_archive
 
 
-def test_extract_zip_archive(tmp_path: Path):
+def test_extract_zip_archive(tmp_path: Path) -> None:
     """
     Test that a zip archive is correctly extracted.
     """

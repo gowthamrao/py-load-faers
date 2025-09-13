@@ -1,30 +1,35 @@
 # -*- coding: utf-8 -*-
-import pytest
 import zipfile
 from pathlib import Path
+from typing import Any, Dict, Iterator, List
 
+import psycopg
+import pytest
+from psycopg.rows import dict_row
+from pytest_mock import MockerFixture
 from testcontainers.postgres import PostgresContainer
+
 from py_load_faers.config import AppSettings, DatabaseSettings, DownloaderSettings
 from py_load_faers.engine import FaersLoaderEngine
 from py_load_faers_postgres.loader import PostgresLoader
-from typer.testing import CliRunner
-from py_load_faers.cli import app
+from py_load_faers.models import FAERS_TABLE_MODELS
 
 # Mark all tests in this file as integration tests
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
-def postgres_container():
+def postgres_container() -> Iterator[PostgresContainer]:
     """Starts a PostgreSQL container for the test session."""
     with PostgresContainer("postgres:13") as pg:
         yield pg
 
 
 @pytest.fixture
-def db_settings(postgres_container):
+def db_settings(postgres_container: PostgresContainer) -> DatabaseSettings:
     """Provides database settings from the running container."""
     return DatabaseSettings(
+        type="postgresql",
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
         user=postgres_container.POSTGRES_USER,
@@ -34,15 +39,19 @@ def db_settings(postgres_container):
 
 
 @pytest.fixture
-def app_settings(tmp_path, db_settings):
+def app_settings(tmp_path: Path, db_settings: DatabaseSettings) -> AppSettings:
     """Provides application settings for the test."""
     return AppSettings(
-        downloader=DownloaderSettings(download_dir=str(tmp_path)),
         db=db_settings,
+        downloader=DownloaderSettings(
+            download_dir=str(tmp_path), retries=3, timeout=60
+        ),
     )
 
 
-def create_mock_zip(zip_path: Path, quarter: str, data: dict, deletions: list = []):
+def create_mock_zip(
+    zip_path: Path, quarter: str, data: Dict[str, str], deletions: List[str] = []
+) -> None:
     """Creates a mock FAERS zip file with the given data."""
     year_short = quarter[2:4]
     q_num = quarter[-1]
@@ -57,7 +66,7 @@ def create_mock_zip(zip_path: Path, quarter: str, data: dict, deletions: list = 
 
 
 @pytest.fixture
-def mock_faers_data(tmp_path):
+def mock_faers_data(tmp_path: Path) -> Path:
     """Creates mock FAERS data files for testing."""
     # --- Quarter 1 Data (2024Q1) ---
     # Case 101: Initial version
@@ -91,14 +100,21 @@ def mock_faers_data(tmp_path):
         "drug": ("primaryid$drug_seq$drugname\n" "2002$1$Ibuprofen PM\n" "1004$1$Advil"),
     }
     # Case 103 will be deleted via this deletion file
-    create_mock_zip(tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"])
+    create_mock_zip(
+        tmp_path / "faers_ascii_2024q2.zip", "2024q2", q2_data, deletions=["103"]
+    )
 
     return tmp_path
 
 
-def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocker):
+def test_delta_load_end_to_end(
+    app_settings: AppSettings,
+    db_settings: DatabaseSettings,
+    mock_faers_data: Path,
+    mocker: MockerFixture,
+) -> None:
     """
-    Tests the end-to-end delta loading process using the CLI runner.
+    Tests the end-to-end delta loading process.
     1. Initialize the DB.
     2. Load Q1 data.
     3. Run a delta load for Q2.
@@ -111,25 +127,18 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
     )
     mocker.patch("py_load_faers.engine.find_latest_quarter", return_value="2024q2")
 
-    runner = CliRunner()
-    env = {
-        "PY_LOAD_FAERS_DB__HOST": db_settings.host,
-        "PY_LOAD_FAERS_DB__PORT": str(db_settings.port),
-        "PY_LOAD_FAERS_DB__USER": db_settings.user,
-        "PY_LOAD_FAERS_DB__PASSWORD": db_settings.password,
-        "PY_LOAD_FAERS_DB__DBNAME": db_settings.dbname,
-        "PY_LOAD_FAERS_DOWNLOADER__DOWNLOAD_DIR": app_settings.downloader.download_dir,
-    }
-
     # --- 1. Initialize the schema ---
-    result_init = runner.invoke(app, ["db-init"], env=env)
-    assert result_init.exit_code == 0
+    db_loader_init = PostgresLoader(db_settings)
+    db_loader_init.connect()
+    assert db_loader_init.conn is not None
+    db_loader_init.initialize_schema(FAERS_TABLE_MODELS)
+    db_loader_init.commit()
+    db_loader_init.conn.close()
 
     # --- 2. Run initial load for Q1 ---
-    # The 'run' command in the CLI is not updated for delta logic yet.
-    # We will call the engine directly for this test.
     pg_loader_q1 = PostgresLoader(db_settings)
     pg_loader_q1.connect()
+    assert pg_loader_q1.conn is not None
     engine_q1 = FaersLoaderEngine(app_settings, pg_loader_q1)
     engine_q1.run_load(quarter="2024q1")
     pg_loader_q1.conn.close()
@@ -137,26 +146,31 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
     # --- Verify Q1 Load ---
     verify_loader = PostgresLoader(db_settings)
     verify_loader.connect()
-    with verify_loader.conn.cursor() as cur:
+    assert verify_loader.conn is not None
+    with verify_loader.conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT COUNT(*) FROM demo")
-        assert cur.fetchone()["count"] == 3
+        count_res = cur.fetchone()
+        assert count_res is not None
+        assert count_res["count"] == 3
         cur.execute("SELECT caseid FROM demo ORDER BY caseid")
         results = [r["caseid"] for r in cur.fetchall()]
         assert results == ["101", "102", "103"]
     verify_loader.conn.close()
 
     # --- 3. Run Delta Load (which should pick up Q2) ---
-    # Re-initialize the engine to simulate a new run
     pg_loader_delta = PostgresLoader(db_settings)
     pg_loader_delta.connect()
+    assert pg_loader_delta.conn is not None
     engine_delta = FaersLoaderEngine(app_settings, pg_loader_delta)
     engine_delta.run_load(mode="delta")
 
     # --- 4. Verify Final Database State ---
-    with pg_loader_delta.conn.cursor() as cur:
+    with pg_loader_delta.conn.cursor(row_factory=dict_row) as cur:
         # Check total counts
         cur.execute("SELECT COUNT(*) FROM demo")
-        assert cur.fetchone()["count"] == 3  # 101, 102 (new), 104
+        count_res = cur.fetchone()
+        assert count_res is not None
+        assert count_res["count"] == 3  # 101, 102 (new), 104
 
         # Check case content
         cur.execute("SELECT primaryid, caseid FROM demo ORDER BY caseid")
@@ -168,11 +182,15 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
 
         # Verify Case 103 is deleted
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '103'")
-        assert cur.fetchone()["count"] == 0
+        count_res = cur.fetchone()
+        assert count_res is not None
+        assert count_res["count"] == 0
 
         # Verify drug name for updated case 102
         cur.execute("SELECT drugname FROM drug WHERE primaryid = '2002'")
-        assert cur.fetchone()["drugname"] == "IBUPROFEN PM"
+        drug_res = cur.fetchone()
+        assert drug_res is not None
+        assert drug_res["drugname"] == "IBUPROFEN PM"
 
         # Verify load history
         cur.execute("SELECT quarter, status FROM _faers_load_history ORDER BY quarter")
@@ -182,3 +200,4 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
         assert history[0]["status"] == "SUCCESS"
         assert history[1]["quarter"] == "2024q2"
         assert history[1]["status"] == "SUCCESS"
+    pg_loader_delta.conn.close()

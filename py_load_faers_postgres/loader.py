@@ -2,14 +2,14 @@
 """
 This module provides the PostgreSQL implementation of the AbstractDatabaseLoader.
 """
+import io
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, Tuple
-from pydantic import BaseModel
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
-import io
 import polars as pl
 import psycopg
+from pydantic import BaseModel
 from psycopg.rows import dict_row
 
 from py_load_faers.config import DatabaseSettings
@@ -24,7 +24,7 @@ class PostgresLoader(AbstractDatabaseLoader):
 
     def __init__(self, settings: DatabaseSettings):
         self.settings = settings
-        self.conn: Optional[psycopg.Connection] = None
+        self.conn: Optional[psycopg.Connection[Dict[str, Any]]] = None
 
     def connect(self) -> None:
         """Establish a connection to the PostgreSQL database."""
@@ -167,7 +167,7 @@ class PostgresLoader(AbstractDatabaseLoader):
 
                 # Use an in-memory buffer to stream CSV data from the Parquet file
                 buffer = io.BytesIO()
-                df.write_csv(buffer, separator="$", has_header=True)
+                df.write_csv(buffer, separator="$", include_header=True)
                 buffer.seek(0)
 
                 columns = ", ".join([f'"{col}"' for col in df.columns])
@@ -363,7 +363,7 @@ class PostgresLoader(AbstractDatabaseLoader):
             result = cur.fetchone()
 
         if result:
-            last_quarter = result["quarter"]
+            last_quarter = cast(str, result["quarter"])
             logger.info(f"Last successful load was for quarter: {last_quarter}")
             return last_quarter
         else:

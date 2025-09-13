@@ -4,13 +4,15 @@ This module defines the abstract base class for all database loaders.
 """
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class AbstractDatabaseLoader(ABC):
     """
     An abstract base class that defines the interface for database-specific loaders.
     """
+
+    conn: Optional[Any] = None
 
     @abstractmethod
     def connect(self) -> None:
@@ -92,5 +94,14 @@ class AbstractDatabaseLoader(ABC):
         Retrieve the identifier of the last successfully loaded quarter.
 
         :return: The quarter string (e.g., "2025Q3") or None if no successful loads.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def run_post_load_dq_checks(self) -> Tuple[bool, str]:
+        """
+        Runs post-load data quality (DQ) checks against the database.
+
+        :return: A tuple containing a boolean success status and a message.
         """
         raise NotImplementedError

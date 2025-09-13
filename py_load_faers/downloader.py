@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from tqdm import tqdm
@@ -61,9 +61,12 @@ def find_latest_quarter() -> Optional[str]:
 
         quarters = []
         for link in links:
-            match = re.search(r"faers_ascii_(\d{4}q\d)\.zip", link["href"])
-            if match:
-                quarters.append(match.group(1))
+            if isinstance(link, Tag):
+                href = link.get("href")
+                if isinstance(href, str):
+                    match = re.search(r"faers_ascii_(\d{4}q\d)\.zip", href)
+                    if match:
+                        quarters.append(match.group(1))
 
         if not quarters:
             logger.warning("Could not parse any quarter strings from the download links.")

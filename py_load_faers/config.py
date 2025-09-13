@@ -62,10 +62,10 @@ class AppSettings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    db: DatabaseSettings = Field(default_factory=DatabaseSettings)
-    downloader: DownloaderSettings = Field(default_factory=DownloaderSettings)
-    processing: ProcessingSettings = Field(default_factory=ProcessingSettings)
-    log_level: str = Field("INFO", description="Logging level (e.g., DEBUG, INFO, WARNING).")
+    db: DatabaseSettings = Field(default_factory=DatabaseSettings)  # type: ignore
+    downloader: DownloaderSettings = Field(default_factory=DownloaderSettings)  # type: ignore
+    processing: ProcessingSettings = Field(default_factory=ProcessingSettings)  # type: ignore
+    log_level: str = "INFO"
 
     @classmethod
     def from_yaml(cls, path: Path) -> "AppSettings":
@@ -99,6 +99,10 @@ def load_config(profile: Optional[str] = None, config_file: Optional[str] = None
 
     # 2. Load from YAML file
     cfg_path_str = config_file or os.environ.get("CONFIG_FILE", "config.yaml")
+    if cfg_path_str is None:
+        # This case should not be reachable due to the default in `get`, but it
+        # satisfies mypy that `cfg_path_str` is not None.
+        cfg_path_str = "config.yaml"
     cfg_path = Path(cfg_path_str)
 
     if cfg_path.exists():

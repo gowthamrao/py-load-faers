@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-import pytest
 import zipfile
 from pathlib import Path
+from typing import Iterator
+
 import psycopg
-from testcontainers.postgres import PostgresContainer
+import pytest
 from py_load_faers.config import (
     AppSettings,
     DatabaseSettings,
@@ -12,12 +13,14 @@ from py_load_faers.config import (
 )
 from py_load_faers.engine import FaersLoaderEngine
 from py_load_faers_postgres.loader import PostgresLoader
+from pytest_mock import MockerFixture
+from testcontainers.postgres import PostgresContainer
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
-def postgres_container():
+def postgres_container() -> Iterator[PostgresContainer]:
     with PostgresContainer("postgres:13") as container:
         yield container
 
@@ -25,6 +28,7 @@ def postgres_container():
 @pytest.fixture(scope="module")
 def db_settings(postgres_container: PostgresContainer) -> DatabaseSettings:
     return DatabaseSettings(
+        type="postgresql",
         host=postgres_container.get_container_host_ip(),
         port=postgres_container.get_exposed_port(5432),
         user=postgres_container.POSTGRES_USER,
@@ -47,8 +51,8 @@ def realistic_xml_zip(tmp_path: Path) -> Path:
 
 
 def test_full_xml_load_via_parquet_staging(
-    db_settings: DatabaseSettings, realistic_xml_zip: Path, mocker
-):
+    db_settings: DatabaseSettings, realistic_xml_zip: Path, mocker: MockerFixture
+) -> None:
     """
     This integration test verifies the end-to-end XML loading process when
     using Parquet as the intermediate staging format. The final data in the
@@ -64,12 +68,16 @@ def test_full_xml_load_via_parquet_staging(
     # Key change for this test: Set staging_format to 'parquet'
     config = AppSettings(
         db=db_settings,
-        downloader=DownloaderSettings(download_dir=str(realistic_xml_zip.parent)),
-        processing=ProcessingSettings(staging_format="parquet"),
+        downloader=DownloaderSettings(
+            download_dir=str(realistic_xml_zip.parent), retries=3, timeout=60
+        ),
+        processing=ProcessingSettings(staging_format="parquet", chunk_size=500000),
     )
 
     db_loader = PostgresLoader(config.db)
     db_loader.connect()
+    assert db_loader.conn is not None
+
     db_loader.initialize_schema(FAERS_TABLE_MODELS)
     db_loader.commit()
 
@@ -93,8 +101,10 @@ def test_full_xml_load_via_parquet_staging(
 
         # 2. Verify that case 101 is completely gone
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '101'")
+        count_res = cur.fetchone()
+        assert count_res is not None
         assert (
-            cur.fetchone()["count"] == 0
+            count_res["count"] == 0
         ), "Case 101 should have been deleted due to nullification"
 
         # 3. Verify data in a child table
@@ -115,4 +125,5 @@ def test_full_xml_load_via_parquet_staging(
             meta_res["rows_deleted"] == 0
         ), "Nullification now happens before DB insertion, so no rows are deleted from DB"
 
-    db_loader.conn.close()
+    if db_loader.conn:
+        db_loader.conn.close()
