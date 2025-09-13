@@ -160,7 +160,7 @@ def test_run_command_end_to_end(
         cur.execute("SELECT COUNT(*) FROM drug")
         assert cur.fetchone()["count"] == 3
         cur.execute("SELECT drugname FROM drug WHERE primaryid = '1002'")
-        assert cur.fetchone()["drugname"] == "Metformin"
+        assert cur.fetchone()["drugname"] == "METFORMIN"
     loader.conn.close()
 
 

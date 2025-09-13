@@ -4,7 +4,7 @@ This module provides the PostgreSQL implementation of the AbstractDatabaseLoader
 """
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Tuple
 from pydantic import BaseModel
 
 import io
@@ -297,18 +297,17 @@ class PostgresLoader(AbstractDatabaseLoader):
             cur.execute(sql, params)
         logger.info(f"Load history updated for load_id {metadata.get('load_id')}.")
 
-    def run_post_load_dq_checks(self) -> None:
+    def run_post_load_dq_checks(self) -> Tuple[bool, str]:
         """
         Runs post-load data quality (DQ) checks against the database.
         As per FRD R60, this verifies the deduplication was successful.
+
+        :return: A tuple containing a boolean success status and a message.
         """
         if not self.conn:
             raise ConnectionError("No database connection available.")
 
         logger.info("Running post-load data quality checks...")
-
-        # R60: Verify that deduplication was successful.
-        # The number of unique caseids should equal the total number of rows.
         dq_sql = (
             "SELECT COUNT(DISTINCT caseid) as distinct_caseids, COUNT(*) as total_rows FROM demo;"
         )
@@ -318,24 +317,28 @@ class PostgresLoader(AbstractDatabaseLoader):
             result = cur.fetchone()
 
         if not result:
-            raise DataQualityError("Could not retrieve DQ check results from the demo table.")
+            msg = "Could not retrieve DQ check results from the demo table."
+            logger.error(msg)
+            raise DataQualityError(msg)
 
         distinct_caseids = result.get("distinct_caseids", 0)
         total_rows = result.get("total_rows", -1)
 
         if distinct_caseids == total_rows:
-            logger.info(
+            msg = (
                 f"DQ Check Passed: DEMO table contains {total_rows} rows, "
                 "all with unique CASEIDs."
             )
+            logger.info(msg)
+            return True, msg
         else:
-            error_msg = (
+            msg = (
                 "DQ Check FAILED: Deduplication error detected in DEMO "
                 f"table. Found {total_rows} total rows but only "
                 f"{distinct_caseids} unique CASEIDs."
             )
-            logger.error(error_msg)
-            raise DataQualityError(error_msg)
+            logger.error(msg)
+            raise DataQualityError(msg)
 
     def get_last_successful_load(self) -> Optional[str]:
         """

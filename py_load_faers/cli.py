@@ -82,9 +82,11 @@ def run(
     settings = config.load_config(profile=profile)
 
     if settings.db.type != "postgresql":
-        logger.error(
+        typer.secho(
             f"Unsupported database type: {settings.db.type}. "
-            "Only 'postgresql' is currently supported."
+            "Only 'postgresql' is currently supported.",
+            err=True,
+            fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)
 
@@ -92,10 +94,10 @@ def run(
     try:
         db_loader.connect()
         engine = FaersLoaderEngine(config=settings, db_loader=db_loader)
-        engine.run_load(mode=mode, quarter=quarter)
-        logger.info(f"ETL process completed successfully in '{mode}' mode.")
+        _, dq_message = engine.run_load(mode=mode, quarter=quarter)
+        typer.secho(f"ETL process completed. {dq_message}", fg=typer.colors.GREEN)
     except Exception as e:
-        logger.error(f"An error occurred during the ETL process: {e}")
+        typer.secho(f"An error occurred during the ETL process: {e}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1)
     finally:
         if db_loader.conn:
@@ -154,12 +156,14 @@ def db_verify(
     Verifies the integrity of the loaded data, e.g., checking for duplicates.
     """
     settings = config.load_config(profile=profile)
-    logger.info(f"Running data quality verification on profile '{profile}'.")
+    typer.echo(f"Running data quality verification on profile '{profile}'.")
 
     if settings.db.type != "postgresql":
-        logger.error(
+        typer.secho(
             f"Unsupported database type: {settings.db.type}. "
-            "Only 'postgresql' is currently supported."
+            "Only 'postgresql' is currently supported.",
+            err=True,
+            fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)
 
@@ -167,10 +171,14 @@ def db_verify(
     try:
         loader.connect()
         # No transaction needed for read-only checks
-        loader.run_post_load_dq_checks()
-        logger.info("Data quality verification completed successfully.")
+        passed, message = loader.run_post_load_dq_checks()
+        if passed:
+            typer.secho(message, fg=typer.colors.GREEN)
+        else:
+            typer.secho(message, err=True, fg=typer.colors.RED)
+            raise typer.Exit(code=1)
     except Exception as e:
-        logger.error(f"Data quality verification failed: {e}", exc_info=True)
+        typer.secho(f"Data quality verification failed: {e}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1)
     finally:
         if loader.conn:
