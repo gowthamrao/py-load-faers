@@ -66,13 +66,17 @@ def get_caseids_to_delete(zip_path: Path) -> Set[str]:
     return case_ids_to_delete
 
 
-def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
+def deduplicate_polars(
+    demo_files: List[Path], format: str, case_ids_to_ignore: Set[str] | None = None
+) -> Set[str]:
     """
     Applies the FDA-recommended deduplication logic using Polars for scalability.
     This function can process multiple files (CSV or Parquet) in a memory-efficient way.
 
     :param demo_files: A list of Path objects pointing to the DEMO files.
     :param format: The format of the files ('csv' or 'parquet').
+    :param case_ids_to_ignore: An optional set of case IDs to exclude from
+        deduplication.
     :return: A set of PRIMARYID strings that should be kept.
     """
     if not demo_files:
@@ -107,6 +111,10 @@ def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
         if not required_cols.issubset(lazy_query.columns):
             missing = required_cols - set(lazy_query.columns)
             raise ValueError(f"Deduplication failed due to missing columns: {missing}")
+
+        if case_ids_to_ignore:
+            logger.info(f"Excluding {len(case_ids_to_ignore)} nullified cases from deduplication.")
+            lazy_query = lazy_query.filter(~pl.col("caseid").is_in(list(case_ids_to_ignore)))
 
         deduplicated_query = lazy_query.select(["primaryid", "caseid", "fda_dt"]).with_columns(
             pl.col("fda_dt").str.to_date("%Y%m%d", strict=False).alias("fda_dt_parsed")

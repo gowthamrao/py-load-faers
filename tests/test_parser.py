@@ -3,7 +3,7 @@
 Tests for the ASCII file parser.
 """
 from pathlib import Path
-from py_load_faers.parser import parse_ascii_file
+from py_load_faers.parser import parse_ascii_file, parse_ascii_quarter
 
 SAMPLE_DEMO_DATA = """\
 PRIMARYID$CASEID$CASEVERSION$I_F_CODE$EVENT_DT$MFR_DT
@@ -45,9 +45,6 @@ def test_parse_empty_file(tmp_path: Path):
     assert len(records) == 0
 
 
-import pytest
-from py_load_faers.parser import parse_ascii_quarter
-
 def test_parse_ascii_quarter():
     """
     Tests the main ASCII parsing logic which reads a directory of ASCII files,
@@ -68,7 +65,8 @@ def test_parse_ascii_quarter():
     # 2. Check that the correct number of records are returned (3 total cases - 1 deleted)
     assert len(records) == 2
 
-    # 3. Deeply inspect the structure of a returned record to ensure it matches the XML parser's output
+    # 3. Deeply inspect the structure of a returned record to ensure it matches the XML
+    # parser's output
     case_101 = next((r for r in records if r["demo"][0]["caseid"] == "101"), None)
     assert case_101 is not None
 

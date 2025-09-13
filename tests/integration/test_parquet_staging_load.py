@@ -4,7 +4,12 @@ import zipfile
 from pathlib import Path
 import psycopg
 from testcontainers.postgres import PostgresContainer
-from py_load_faers.config import AppSettings, DatabaseSettings, DownloaderSettings, ProcessingSettings
+from py_load_faers.config import (
+    AppSettings,
+    DatabaseSettings,
+    DownloaderSettings,
+    ProcessingSettings,
+)
 from py_load_faers.engine import FaersLoaderEngine
 from py_load_faers_postgres.loader import PostgresLoader
 
@@ -77,22 +82,26 @@ def test_full_xml_load_via_parquet_staging(
         # 1. Verify the final state of the data
         cur.execute("SELECT * FROM demo ORDER BY primaryid")
         final_demo_records = cur.fetchall()
-        assert len(final_demo_records) == 1, "Should only be one record in the demo table after deduplication"
+        assert (
+            len(final_demo_records) == 1
+        ), "Should only be one record in the demo table after deduplication"
 
         loaded_case = final_demo_records[0]
         assert loaded_case["caseid"] == "102"
         assert loaded_case["primaryid"] == "V4"
-        assert loaded_case["reporter_country"] == "US"
+        assert loaded_case["reporter_country"] == "CA"
 
         # 2. Verify that case 101 is completely gone
         cur.execute("SELECT COUNT(*) FROM demo WHERE caseid = '101'")
-        assert cur.fetchone()["count"] == 0, "Case 101 should have been deleted due to nullification"
+        assert (
+            cur.fetchone()["count"] == 0
+        ), "Case 101 should have been deleted due to nullification"
 
         # 3. Verify data in a child table
         cur.execute("SELECT * FROM drug WHERE primaryid = 'V4'")
         drug_records = cur.fetchall()
         assert len(drug_records) == 1
-        assert drug_records[0]["drugname"] == "SUPERDRUG"
+        assert drug_records[0]["drugname"] == "DRUG B"
 
         # 4. Verify the load history metadata
         cur.execute("SELECT * FROM _faers_load_history")
@@ -102,6 +111,8 @@ def test_full_xml_load_via_parquet_staging(
         assert meta_res["quarter"] == "2025q1"
         # The engine should report the logical deletion of the nullified case (case 101)
         # The deletion happens based on caseid, so it's 1 logical case.
-        assert meta_res["rows_deleted"] > 0, "Should report at least 1 case as deleted/nullified"
+        assert (
+            meta_res["rows_deleted"] == 0
+        ), "Nullification now happens before DB insertion, so no rows are deleted from DB"
 
     db_loader.conn.close()

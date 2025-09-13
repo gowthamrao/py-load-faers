@@ -113,12 +113,22 @@ class FaersLoaderEngine:
         """
         logger.info(f"Processing quarter: {quarter}")
         load_id = uuid.uuid4()
+        start_time = datetime.now(timezone.utc)
+
+        # Initialize metadata with all required fields to prevent SQL errors
         metadata = {
             "load_id": load_id,
             "quarter": quarter,
             "load_type": load_type,
-            "start_timestamp": datetime.now(timezone.utc),
+            "start_timestamp": start_time,
+            "end_timestamp": None,
             "status": "RUNNING",
+            "source_checksum": None,
+            "rows_extracted": 0,
+            "rows_loaded": 0,
+            "rows_updated": 0,
+            "rows_deleted": 0,
+            "error_message": None,
         }
         self.db_loader.update_load_history(metadata)
 
@@ -149,7 +159,7 @@ class FaersLoaderEngine:
                 return
 
             primaryids_to_keep = deduplicate_polars(
-                demo_chunks, self.config.processing.staging_format
+                demo_chunks, self.config.processing.staging_format, nullified_ids
             )
 
             # --- Unified Filtering and Loading ---
@@ -177,6 +187,7 @@ class FaersLoaderEngine:
             metadata["status"] = "SUCCESS"
         except Exception as e:
             metadata["status"] = "FAILED"
+            metadata["error_message"] = str(e)
             logger.error(f"Processing failed for quarter {quarter}: {e}", exc_info=True)
             raise
         finally:
@@ -197,7 +208,9 @@ class FaersLoaderEngine:
                 logger.info("Detected XML format.")
                 xml_filename = next(f for f in filenames if f.lower().endswith(".xml"))
                 with zf.open(xml_filename) as xml_stream:
-                    return parse_xml_file(xml_stream)
+                    # Consume the generator and return a list to avoid issues with closed streams
+                    records, nullified_ids = parse_xml_file(xml_stream)
+                    return list(records), nullified_ids
             else:
                 logger.info("Detected ASCII format.")
                 extract_zip_archive(zip_path, extract_dir)
@@ -258,15 +271,16 @@ class FaersLoaderEngine:
                 df_combined = df_combined.with_columns(pl.col(col).cast(pl.Utf8))
 
             filtered_df = df_combined.join(
-                primaryids_series.to_frame(), on="primaryid", how="inner"
+                primaryids_series.to_frame().lazy(), on="primaryid", how="inner"
             )
 
-            if filtered_df.height > 0:
-                logger.debug(f"Writing {filtered_df.height} rows to {final_path}")
+            collected_df = filtered_df.collect()
+            if collected_df.height > 0:
+                logger.debug(f"Writing {collected_df.height} rows to {final_path}")
                 if format == "parquet":
-                    filtered_df.collect().write_parquet(final_path, compression="zstd")
+                    collected_df.write_parquet(final_path, compression="zstd")
                 else:
-                    filtered_df.collect().write_csv(final_path, separator="$")
+                    collected_df.write_csv(final_path, separator="$")
             else:
                 logger.warning(f"No records left for table {table_name} after filtering.")
                 # Create an empty file with headers so downstream steps don't fail

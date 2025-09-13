@@ -126,7 +126,8 @@ class PostgresLoader(AbstractDatabaseLoader):
             rows_extracted BIGINT,
             rows_loaded BIGINT,
             rows_updated BIGINT,
-            rows_deleted BIGINT
+            rows_deleted BIGINT,
+            error_message TEXT
         );
         """
 
@@ -196,7 +197,7 @@ class PostgresLoader(AbstractDatabaseLoader):
             logger.info("No case_ids provided for deletion.")
             return 0
 
-        logger.info(f"Starting deletion for {len(case_ids)} case_ids.")
+        logger.info(f"Starting deletion for {len(case_ids)} case_ids: {case_ids}")
 
         # We need to get the corresponding primaryid values from the demo
         # table first, as other tables are linked via primaryid.
@@ -206,6 +207,7 @@ class PostgresLoader(AbstractDatabaseLoader):
                 (list(case_ids),),
             )
             primary_ids = [row["primaryid"] for row in cur.fetchall()]
+            logger.info(f"Found {len(primary_ids)} primary_ids to delete: {primary_ids}")
 
         if not primary_ids:
             logger.info("No matching primary_ids found for the given case_ids. Nothing to delete.")
@@ -269,12 +271,12 @@ class PostgresLoader(AbstractDatabaseLoader):
             INSERT INTO _faers_load_history (
                 load_id, quarter, load_type, start_timestamp,
                 end_timestamp, status, source_checksum, rows_extracted,
-                rows_loaded, rows_updated, rows_deleted
+                rows_loaded, rows_updated, rows_deleted, error_message
             ) VALUES (
                 %(load_id)s, %(quarter)s, %(load_type)s,
                 %(start_timestamp)s, %(end_timestamp)s, %(status)s,
                 %(source_checksum)s, %(rows_extracted)s, %(rows_loaded)s,
-                %(rows_updated)s, %(rows_deleted)s
+                %(rows_updated)s, %(rows_deleted)s, %(error_message)s
             )
             ON CONFLICT (load_id) DO UPDATE SET
                 end_timestamp = EXCLUDED.end_timestamp,
@@ -283,11 +285,16 @@ class PostgresLoader(AbstractDatabaseLoader):
                 rows_extracted = EXCLUDED.rows_extracted,
                 rows_loaded = EXCLUDED.rows_loaded,
                 rows_updated = EXCLUDED.rows_updated,
-                rows_deleted = EXCLUDED.rows_deleted;
+                rows_deleted = EXCLUDED.rows_deleted,
+                error_message = EXCLUDED.error_message;
         """
 
+        # Ensure error_message is None if not provided, to avoid SQL errors
+        params = metadata.copy()
+        params.setdefault("error_message", None)
+
         with self.conn.cursor() as cur:
-            cur.execute(sql, metadata)
+            cur.execute(sql, params)
         logger.info(f"Load history updated for load_id {metadata.get('load_id')}.")
 
     def run_post_load_dq_checks(self) -> None:

@@ -69,7 +69,7 @@ def parse_ascii_quarter(
 
 def _parse_deletion_file(quarter_dir: Path) -> Set[str]:
     """Finds and parses a FAERS deletion file, returning a set of CASEIDs."""
-    deletion_patterns = ["DELE*.TXT", "DELETED_CASES_*.TXT"]
+    deletion_patterns = ["DELE*.[tT][xX][tT]", "DELETED_CASES_*.[tT][xX][tT]"]
     nullified_case_ids: Set[str] = set()
     for pattern in deletion_patterns:
         try:
@@ -108,7 +108,7 @@ def _load_ascii_tables_to_polars(
     for table in table_names:
         try:
             # Find file ignoring case, e.g., DEMO24Q1.TXT or demo24q1.txt
-            file_path = next(quarter_dir.glob(f"{table.upper()}*.TXT"))
+            file_path = next(quarter_dir.glob(f"{table.upper()}*.[tT][xX][tT]"))
             df = pl.read_csv(
                 file_path,
                 separator="$",
