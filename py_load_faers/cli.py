@@ -97,7 +97,9 @@ def run(
         _, dq_message = engine.run_load(mode=mode, quarter=quarter)
         typer.secho(f"ETL process completed. {dq_message}", fg=typer.colors.GREEN)
     except Exception as e:
-        typer.secho(f"An error occurred during the ETL process: {e}", err=True, fg=typer.colors.RED)
+        typer.secho(
+            f"An error occurred during the ETL process: {e}", err=True, fg=typer.colors.RED
+        )
         raise typer.Exit(code=1)
     finally:
         if db_loader.conn:
