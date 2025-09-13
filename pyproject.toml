@@ -54,3 +54,8 @@ line-length = 99
 
 [tool.ruff]
 line-length = 99
+
+[tool.mypy]
+[[tool.mypy.overrides]]
+module = "testcontainers.postgres"
+ignore_missing_imports = true
