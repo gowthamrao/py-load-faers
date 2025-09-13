@@ -97,7 +97,8 @@ class FaersLoaderEngine:
 
             # Run post-load DQ checks after a successful commit
             logger.info("Proceeding to post-load data quality checks...")
-            self.db_loader.run_post_load_dq_checks()
+            dq_passed, dq_message = self.db_loader.run_post_load_dq_checks()
+            return dq_passed, dq_message
 
         except Exception as e:
             logger.error(f"An error occurred during the loading process: {e}", exc_info=True)
@@ -269,6 +270,18 @@ class FaersLoaderEngine:
             # Ensure all columns are present, casting to Utf8 for consistency
             for col in df_combined.columns:
                 df_combined = df_combined.with_columns(pl.col(col).cast(pl.Utf8))
+
+            # --- Data Cleaning Step ---
+            # Apply specific cleaning logic for the 'drug' table
+            if table_name == "drug" and "drugname" in df_combined.columns:
+                df_combined = df_combined.with_columns(
+                    pl.col("drugname")
+                    .str.strip_chars()
+                    .str.replace(r"(?i)^NULL$", "")
+                    .str.replace_all(r"[^a-zA-Z0-9\s]+", "")
+                    .str.to_uppercase()
+                    .alias("drugname")
+                )
 
             filtered_df = df_combined.join(
                 primaryids_series.to_frame().lazy(), on="primaryid", how="inner"

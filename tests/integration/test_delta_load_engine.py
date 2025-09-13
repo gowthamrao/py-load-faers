@@ -51,7 +51,9 @@ def create_mock_zip(zip_path: Path, quarter: str, data: dict, deletions: list = 
             filename = f"{table.upper()}{year_short}Q{q_num}.txt"
             zf.writestr(filename, content)
         if deletions:
-            zf.writestr(f"del_{quarter}.txt", "\n".join(deletions))
+            # The deletion file requires a header
+            content = "caseid\n" + "\n".join(deletions)
+            zf.writestr(f"del_{quarter}.txt", content)
 
 
 @pytest.fixture
@@ -170,7 +172,7 @@ def test_delta_load_end_to_end(app_settings, db_settings, mock_faers_data, mocke
 
         # Verify drug name for updated case 102
         cur.execute("SELECT drugname FROM drug WHERE primaryid = '2002'")
-        assert cur.fetchone()["drugname"] == "Ibuprofen PM"
+        assert cur.fetchone()["drugname"] == "IBUPROFEN PM"
 
         # Verify load history
         cur.execute("SELECT quarter, status FROM _faers_load_history ORDER BY quarter")
