@@ -150,3 +150,21 @@ def deduplicate_polars(demo_files: List[Path], format: str) -> Set[str]:
     except Exception as e:
         logger.error(f"An unexpected error occurred during Polars deduplication: {e}")
         raise
+
+
+def clean_drug_names(records: List[dict]) -> List[dict]:
+    """
+    Cleans drug names in a list of records.
+
+    :param records: A list of drug records (dictionaries).
+    :return: The list of records with cleaned drug names.
+    """
+    for record in records:
+        if "drugname" in record and isinstance(record["drugname"], str):
+            drug_name = record["drugname"].strip()
+            if drug_name.upper() == "NULL":
+                drug_name = ""
+            # Remove special characters, keeping only letters, numbers, and spaces
+            drug_name = re.sub(r"[^a-zA-Z0-9\s]+", "", drug_name)
+            record["drugname"] = drug_name.upper()
+    return records
